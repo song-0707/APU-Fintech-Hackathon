@@ -21,7 +21,11 @@ const preferredMimeType = () => [
 
 const mediaTrack = (trackRef: TrackReference) => trackRef.publication.track?.mediaStreamTrack;
 
-export const MeetingRecorder: React.FC<{ roomName: string; onError: (message: string) => void }> = ({ roomName, onError }) => {
+export const MeetingRecorder: React.FC<{
+  roomName: string;
+  onError: (message: string) => void;
+  variant?: 'control' | 'menu';
+}> = ({ roomName, onError, variant = 'control' }) => {
   const microphones = useTracks([Track.Source.Microphone], { onlySubscribed: true });
   const runtimeRef = useRef<RecordingRuntime | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -168,13 +172,16 @@ export const MeetingRecorder: React.FC<{ roomName: string; onError: (message: st
 
   const minutes = Math.floor(elapsedSeconds / 60).toString().padStart(2, '0');
   const seconds = (elapsedSeconds % 60).toString().padStart(2, '0');
+  const buttonClass = variant === 'menu'
+    ? 'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition-colors'
+    : 'flex min-w-20 flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold transition-colors';
 
   return isRecording ? (
-    <button onClick={stopRecording} className="flex min-w-20 flex-col items-center gap-1 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700" title="Stop and download recording">
+    <button type="button" onClick={stopRecording} className={`${buttonClass} bg-rose-600 text-white hover:bg-rose-700`} title="Stop and download recording">
       <Square className="h-5 w-5 fill-current" /><span>Stop {minutes}:{seconds}</span>
     </button>
   ) : (
-    <button onClick={() => void startRecording()} className="flex min-w-20 flex-col items-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200" title="Select this browser tab to record only the meeting area">
+    <button type="button" onClick={() => void startRecording()} className={`${buttonClass} bg-slate-100 text-slate-700 hover:bg-slate-200`} title="Select this browser tab to record only the meeting area">
       <Circle className="h-5 w-5 fill-rose-600 text-rose-600" /><span>Record</span>
     </button>
   );
