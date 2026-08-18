@@ -13,21 +13,20 @@ import {
   AlertCircle,
   Captions,
   LogOut,
+  Maximize2,
   Mic,
   MicOff,
+  Minimize2,
   MonitorUp,
   Send,
   Sparkles,
   Users,
   Video,
-  Maximize2,
-  Minimize2,
 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { useLiveMeetingSession } from '../hooks/useLiveMeetingSession';
 import { askCoco, BackendCitation } from '../services/api';
-import { CollaborativeWhiteboard } from './CollaborativeWhiteboard';
 import { LiveSuggestionBanner } from './LiveSuggestionBanner';
 import { LiveTranscriptPanel } from './LiveTranscriptPanel';
 import { MeetingRecorder } from './MeetingRecorder';
@@ -169,7 +168,14 @@ const CocoPanel: React.FC = () => {
   );
 };
 
-const RoomContent: React.FC<{ roomName: string; displayName: string; token: string; onLeave: () => void }> = ({ roomName, displayName, token, onLeave }) => {
+const RoomContent: React.FC<{
+  roomName: string;
+  displayName: string;
+  token: string;
+  isFullscreen: boolean;
+  onLeave: () => void;
+  onToggleFullscreen: () => Promise<void>;
+}> = ({ roomName, displayName, token, isFullscreen, onLeave, onToggleFullscreen }) => {
   const participants = useParticipants();
   const cameraTracks = useTracks([Track.Source.Camera]);
   const screenTracks = useTracks([Track.Source.ScreenShare]);
@@ -231,7 +237,7 @@ const RoomContent: React.FC<{ roomName: string; displayName: string; token: stri
   ];
 
   return (
-    <div data-meeting-recording-area className="space-y-5 p-4 sm:p-6">
+    <div data-meeting-recording-area className="space-y-5 p-4 pb-28 sm:p-6 sm:pb-28">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -328,7 +334,6 @@ const RoomContent: React.FC<{ roomName: string; displayName: string; token: stri
               )}
             </div>
           </section>
-          <CollaborativeWhiteboard roomName={roomName} />
           {showCoco && <CocoPanel />}
           {showTranscript && <LiveTranscriptPanel transcript={liveSession.transcript} error={liveSession.captionsError || liveSession.connectionError} />}
         </div>
@@ -346,7 +351,11 @@ const RoomContent: React.FC<{ roomName: string; displayName: string; token: stri
         </aside>
       </div>
 
-      <div className="sticky bottom-3 z-20 flex flex-wrap justify-center gap-2 rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-lg backdrop-blur">
+      <div className={`fixed bottom-3 z-40 flex w-max flex-nowrap items-center justify-center gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-lg backdrop-blur ${
+        isFullscreen
+          ? 'left-1/2 max-w-[calc(100%-1.5rem)] -translate-x-1/2'
+          : 'left-[calc(50%+9rem)] max-w-[calc(100%-19.5rem)] -translate-x-1/2'
+      }`}>
         <ToggleButton label="Mic" enabled={isMicrophoneEnabled} onClick={() => void toggle('microphone')} icon={<Mic className="h-5 w-5" />} inactiveIcon={<MicOff className="h-5 w-5" />} />
         <ToggleButton label="Camera" enabled={isCameraEnabled} onClick={() => void toggle('camera')} icon={<Camera className="h-5 w-5" />} inactiveIcon={<CameraOff className="h-5 w-5" />} />
         <button
@@ -367,6 +376,13 @@ const RoomContent: React.FC<{ roomName: string; displayName: string; token: stri
         </button>
         <ToggleButton label="Share" enabled={isScreenShareEnabled} onClick={() => void toggle('screen')} icon={<MonitorUp className="h-5 w-5" />} inactiveIcon={<MonitorUp className="h-5 w-5" />} />
         <MeetingRecorder roomName={roomName} onError={setMediaError} />
+        <ToggleButton
+          label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          enabled
+          onClick={() => void onToggleFullscreen().catch((fullscreenError) => setMediaError(fullscreenError instanceof Error ? fullscreenError.message : 'Fullscreen could not be changed.'))}
+          icon={isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+          inactiveIcon={isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+        />
         <button onClick={handleLeaveMeeting} className="flex min-w-20 flex-col items-center gap-1 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 cursor-pointer"><LogOut className="h-5 w-5" /><span>Leave</span></button>
       </div>
 
@@ -435,11 +451,19 @@ const RoomContent: React.FC<{ roomName: string; displayName: string; token: stri
 
 export const MeetingRoomView: React.FC = () => {
   const { currentUser } = useApp();
+  const fullscreenRootRef = useRef<HTMLDivElement>(null);
   const [roomName, setRoomName] = useState('');
   const [displayName, setDisplayName] = useState(currentUser.name);
   const [joinDetails, setJoinDetails] = useState<JoinDetails | null>(null);
   const [error, setError] = useState('');
   const [isJoining, setIsJoining] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const updateFullscreenState = () => setIsFullscreen(document.fullscreenElement === fullscreenRootRef.current);
+    document.addEventListener('fullscreenchange', updateFullscreenState);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
+  }, []);
 
   const joinRoom = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -449,62 +473,47 @@ export const MeetingRoomView: React.FC = () => {
     finally { setIsJoining(false); }
   };
 
-  if (joinDetails) {
-    return <LiveKitRoom token={joinDetails.token} serverUrl={joinDetails.serverUrl} connect audio video onError={(roomError) => setError(roomError.message)}><RoomAudioRenderer /><RoomContent roomName={joinDetails.roomName} displayName={joinDetails.displayName} token={joinDetails.token} onLeave={() => { setJoinDetails(null); setError(''); }} /></LiveKitRoom>;
-  }
+  const toggleFullscreen = async () => {
+    if (document.fullscreenElement === fullscreenRootRef.current) {
+      await document.exitFullscreen();
+      return;
+    }
+    if (!fullscreenRootRef.current?.requestFullscreen) throw new Error('Fullscreen is not supported by this browser.');
+    await fullscreenRootRef.current.requestFullscreen();
+  };
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-8rem)] max-w-2xl items-center p-4 sm:p-6">
-      <form onSubmit={joinRoom} className="w-full rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xl dark:shadow-2xl dark:shadow-slate-950/50 sm:p-10 transition-all">
-        <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 dark:bg-blue-600 text-white shadow-md shadow-blue-600/30">
-          <Video className="h-6 w-6" />
-        </div>
-        <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white font-sans">
-          Join a Live Meeting Room
-        </h1>
-        <p className="mt-2 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
-          Enter a <strong className="text-slate-700 dark:text-slate-200">Meeting Room ID</strong> to join or create a session.
-        </p>
-
-        {error && (
-          <div className="mt-5 flex gap-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 p-3 text-sm text-rose-700 dark:text-rose-300">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            {error}
-          </div>
-        )}
-        
-        <div className="mt-6 space-y-2">
-          <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            Meeting Room ID
-          </label>
-          <input
-            value={roomName}
-            onChange={(event) => setRoomName(event.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
-            required
-            maxLength={80}
-            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white outline-none focus:border-blue-600 dark:focus:border-blue-500 font-mono font-bold placeholder-slate-400 dark:placeholder-slate-500 transition-colors shadow-2xs"
-            placeholder="e.g. 1111"
+    <div ref={fullscreenRootRef} className={isFullscreen ? 'h-screen w-screen overflow-y-auto bg-slate-50' : ''}>
+      {joinDetails ? (
+        <LiveKitRoom token={joinDetails.token} serverUrl={joinDetails.serverUrl} connect audio video onError={(roomError) => setError(roomError.message)}>
+          <RoomAudioRenderer />
+          <RoomContent
+            roomName={joinDetails.roomName}
+            displayName={joinDetails.displayName}
+            token={joinDetails.token}
+            isFullscreen={isFullscreen}
+            onToggleFullscreen={toggleFullscreen}
+            onLeave={() => {
+              if (document.fullscreenElement === fullscreenRootRef.current) void document.exitFullscreen();
+              setJoinDetails(null);
+              setError('');
+            }}
           />
+        </LiveKitRoom>
+      ) : (
+        <div className="mx-auto flex min-h-[calc(100vh-8rem)] max-w-2xl items-center p-4 sm:p-6">
+          <form onSubmit={joinRoom} className="w-full rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xl dark:shadow-2xl dark:shadow-slate-950/50 sm:p-10 transition-all">
+            <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-md shadow-blue-600/30"><Video className="h-6 w-6" /></div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white">Join a Live Meeting Room</h1>
+            <p className="mt-2 text-sm leading-relaxed text-slate-500 dark:text-slate-400">Enter a <strong className="text-slate-700 dark:text-slate-200">Meeting Room ID</strong> to join or create a session.</p>
+            {error && <div className="mt-5 flex gap-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 p-3 text-sm text-rose-700 dark:text-rose-300"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}
+            <label className="mt-6 block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Meeting Room ID<input value={roomName} onChange={(event) => setRoomName(event.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))} required maxLength={80} className="mt-2 w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2.5 text-sm font-bold text-slate-900 dark:text-white outline-none focus:border-blue-600" placeholder="e.g. 1111" /></label>
+            <label className="mt-4 block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Your Display Name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required maxLength={80} className="mt-2 w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2.5 text-sm font-semibold text-slate-900 dark:text-white outline-none focus:border-blue-600" /></label>
+            <button disabled={isJoining || !roomName || !displayName} className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-bold text-white shadow-md shadow-blue-600/20 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">{isJoining ? 'Joining…' : 'Join Meeting'}</button>
+            <button type="button" onClick={() => void toggleFullscreen().catch((fullscreenError) => setError(fullscreenError instanceof Error ? fullscreenError.message : 'Fullscreen could not be changed.'))} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 text-sm font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700"><Maximize2 className="h-5 w-5" /> Fullscreen</button>
+          </form>
         </div>
-
-        <label className="mt-4 block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-          Your Display Name
-          <input
-            value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
-            required
-            maxLength={80}
-            className="mt-2 w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white outline-none focus:border-blue-600 dark:focus:border-blue-500 font-semibold transition-colors shadow-2xs"
-          />
-        </label>
-
-        <button
-          disabled={isJoining || !roomName || !displayName}
-          className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 dark:bg-blue-600 px-4 py-3 text-sm font-bold text-white hover:bg-blue-700 dark:hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer shadow-md shadow-blue-600/20 dark:shadow-blue-900/40 transition-all font-sans"
-        >
-          {isJoining ? 'Joining…' : 'Join Meeting'}
-        </button>
-      </form>
+      )}
     </div>
   );
 };
