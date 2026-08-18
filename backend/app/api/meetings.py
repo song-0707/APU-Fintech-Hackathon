@@ -18,7 +18,7 @@ from app.schemas.meeting import (
     MeetingListItem,
     MeetingStatusResponse,
 )
-from app.services import embedding_service
+from app.services import brief_service, embedding_service
 from app.services.storage_service import StorageService
 from app.tasks.meeting_tasks import process_meeting_task
 
@@ -214,6 +214,20 @@ def get_meeting_summary(
     if summary is None:
         raise HTTPException(status_code=202, detail=f"Summary not ready yet: {meeting.status}")
     return summary
+
+
+# ── Pre-Meeting Brief ────────────────────────────────────────────────────
+@router.get("/meetings/{meeting_id}/brief")
+def get_meeting_brief(
+    meeting_id: str,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> dict:
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if meeting is None:
+        raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+    require_meeting_access(db, meeting_id, caller)
+    return brief_service.generate_brief(meeting_id, caller, db)
 
 
 # ── Task 7.2 — Export Report ────────────────────────────────────────────

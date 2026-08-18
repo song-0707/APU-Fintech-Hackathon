@@ -106,7 +106,7 @@ def test_ask_coco_uses_predefined_action_item_query(monkeypatch):
 
     monkeypatch.setattr(askcoco_service, "run_query", fake_run_query)
 
-    result = askcoco_service.ask("Find action items for Sarah Park")
+    result = askcoco_service.ask("Find action items for Sarah Park", meeting_ids=None)
 
     assert "ASSIGNED_TO" in captured["cypher"]
     assert captured["params"]["person"] == "Sarah Park"

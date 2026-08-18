@@ -16,9 +16,11 @@ settings = get_settings()
 
 _DEEPGRAM_URL = (
     "wss://api.deepgram.com/v1/listen"
-    "?model=nova-2&smart_format=true&interim_results=true&punctuate=true&language=en"
+    "?model=nova-2&smart_format=true&interim_results=true&punctuate=true"
+    "&language=en&endpointing=700&utterance_end_ms=1000&vad_events=true"
 )
 _KEEPALIVE_INTERVAL_SECONDS = 5
+_MAX_BUFFER_WORDS = 80
 
 
 class DeepgramLiveConnection:
@@ -41,19 +43,52 @@ class DeepgramLiveConnection:
         await self._ws.close()
 
 
+async def _flush_buffer(buffer: list[str], results: "asyncio.Queue[str]") -> None:
+    text = " ".join(part.strip() for part in buffer if part.strip()).strip()
+    buffer.clear()
+    if text:
+        await results.put(text)
+
+
+def _buffer_word_count(buffer: list[str]) -> int:
+    return sum(len(part.split()) for part in buffer)
+
+
 async def _read_results(ws, results: "asyncio.Queue[str]") -> None:
-    """Only Deepgram's *finalized* results are queued — interim results are
-    for a client-side typing indicator only, never the durable transcript."""
+    """Queue durable utterances, not every finalized ASR fragment.
+
+    Deepgram may finalize small pieces of one sentence separately. Persisting
+    each piece makes Meeting Intelligence look incomplete even when audio was
+    received. Keep interim results out, buffer finalized fragments, and flush
+    on utterance end or periodically during long continuous speech.
+    """
+    buffer: list[str] = []
     try:
         async for raw in ws:
-            data = json.loads(raw)
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            if data.get("type") == "UtteranceEnd":
+                await _flush_buffer(buffer, results)
+                continue
+
             channel = data.get("channel")
             if not channel:
                 continue
             alternatives = channel.get("alternatives") or [{}]
-            text = alternatives[0].get("transcript", "")
+            text = str(alternatives[0].get("transcript", "")).strip()
             if text and data.get("is_final"):
-                await results.put(text)
+                buffer.append(text)
+
+            if buffer and (
+                data.get("speech_final")
+                or _buffer_word_count(buffer) >= _MAX_BUFFER_WORDS
+            ):
+                await _flush_buffer(buffer, results)
+
+        await _flush_buffer(buffer, results)
     except Exception as exc:
         logger.warning("Deepgram live connection reader stopped: %s", exc)
 

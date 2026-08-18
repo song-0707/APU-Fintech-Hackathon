@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { useLiveMeetingSession } from '../hooks/useLiveMeetingSession';
+import { LiveMinuteSummary, useLiveMeetingSession } from '../hooks/useLiveMeetingSession';
 import { askCoco, BackendCitation } from '../services/api';
 import { CollaborativeWhiteboard } from './CollaborativeWhiteboard';
 import { LiveSuggestionBanner } from './LiveSuggestionBanner';
@@ -84,10 +84,58 @@ const ToggleButton: React.FC<{
 
 type CocoMessage = { role: 'user' | 'coco'; text: string; citations?: BackendCitation[] };
 
-// Reuses the same POST /query backend CocoChatView.tsx calls — grounded in
-// past meetings/decisions/action items, not a general chatbot — so
-// participants can pull up prior context without leaving the call.
-const CocoPanel: React.FC = () => {
+const wantsLiveContext = (query: string) => {
+  const lowered = query.toLowerCase();
+  return [
+    'what did i miss', 'missed', 'before i joined', 'just discussed',
+    'live so far', 'so far', 'current meeting', 'this meeting',
+  ].some((phrase) => lowered.includes(phrase));
+};
+
+const liveAnswer = (query: string, liveSummaries: LiveMinuteSummary[], missedSummaries: LiveMinuteSummary[]) => {
+  const lowered = query.toLowerCase();
+  const source = lowered.includes('miss') || lowered.includes('before i joined')
+    ? missedSummaries
+    : lowered.includes('just') || lowered.includes('recent')
+    ? liveSummaries.slice(-1)
+    : liveSummaries;
+
+  if (source.length === 0) {
+    return {
+      answer: 'I do not have enough live meeting context yet. Turn on Live Transcript and wait for the first minute summary.',
+      citations: [],
+    };
+  }
+
+  const decisions = source.flatMap((item) => item.decisions.map((decision) => `${item.label}: ${decision}`));
+  const actions = source.flatMap((item) => item.action_items.map((action) => `${item.label}: ${action.task}${action.assignee ? ` — ${action.assignee}` : ''}`));
+  const risks = source.flatMap((item) => item.risks.map((risk) => `${item.label}: ${risk}`));
+  const summaryLines = source.map((item) => `${item.label}: ${item.summary}`);
+  const sections = [
+    summaryLines.join('\n'),
+    decisions.length ? `\nDecisions:\n${decisions.slice(0, 5).join('\n')}` : '',
+    actions.length ? `\nAction items:\n${actions.slice(0, 5).join('\n')}` : '',
+    risks.length ? `\nRisks:\n${risks.slice(0, 5).join('\n')}` : '',
+  ].filter(Boolean);
+
+  return {
+    answer: sections.join('\n'),
+    citations: source.slice(-3).map((item) => ({
+      filename: `Live meeting ${item.label}`,
+      speaker: 'Live minute intelligence',
+      timestamp: item.label,
+      excerpt: item.summary,
+    })),
+  };
+};
+
+// Historical questions use the same secured POST /query backend as
+// CocoChatView; live-meeting catch-up questions are answered from the
+// room's provisional minute summaries.
+const CocoPanel: React.FC<{
+  minuteSummaries: LiveMinuteSummary[];
+  missedMinuteSummaries: LiveMinuteSummary[];
+}> = ({ minuteSummaries, missedMinuteSummaries }) => {
   const [messages, setMessages] = useState<CocoMessage[]>([]);
   const [input, setInput] = useState('');
   const [isAsking, setIsAsking] = useState(false);
@@ -99,7 +147,9 @@ const CocoPanel: React.FC = () => {
     setMessages((prev) => [...prev, { role: 'user', text: query }]);
     setIsAsking(true);
     try {
-      const result = await askCoco(query);
+      const result = wantsLiveContext(query)
+        ? liveAnswer(query, minuteSummaries, missedMinuteSummaries)
+        : await askCoco(query);
       setMessages((prev) => [...prev, { role: 'coco', text: result.answer, citations: result.citations }]);
     } catch {
       setMessages((prev) => [...prev, { role: 'coco', text: "I couldn't reach the Ask Coco backend just now." }]);
@@ -112,13 +162,13 @@ const CocoPanel: React.FC = () => {
     <section className="rounded-2xl border border-violet-200 bg-violet-50/40 p-4 space-y-3">
       <div className="flex items-center gap-2 text-sm font-bold text-violet-700">
         <Sparkles className="h-4 w-4" /> Ask Coco
-        <span className="font-normal text-violet-500">— grounded in past meetings</span>
+        <span className="font-normal text-violet-500">— live and past meeting context</span>
       </div>
 
       <div className="max-h-64 overflow-y-auto space-y-2.5 pr-1">
         {messages.length === 0 && (
           <p className="text-xs text-slate-400">
-            Ask about past decisions, action items, or contradictions without leaving the call — e.g. "what did we decide about the vendor?"
+            Ask what you missed, what was just discussed, or about past decisions without leaving the call.
           </p>
         )}
         {messages.map((m, i) => (
@@ -186,7 +236,6 @@ const RoomContent: React.FC<{
   const [showTranscript, setShowTranscript] = useState(false);
   const [isScreenEnlarged, setIsScreenEnlarged] = useState(false);
   const [isProcessingPipeline, setIsProcessingPipeline] = useState(false);
-  const [pipelineStep, setPipelineStep] = useState(0);
   const liveSession = useLiveMeetingSession(roomName, token);
 
   const toggle = async (kind: 'microphone' | 'camera' | 'screen') => {
@@ -201,41 +250,13 @@ const RoomContent: React.FC<{
   };
 
   const handleLeaveMeeting = () => {
+    if (isProcessingPipeline) return;
     setIsProcessingPipeline(true);
-    setPipelineStep(1);
-
-    const steps = [
-      'Extracting audio (16kHz mono WAV)...',
-      'Running PyAnnote 3.1 speaker diarization timeline...',
-      'Deepgram & Whisper timestamped transcription...',
-      'Gemini Vision reading speaker nameplates...',
-      'Gemini 2.5 Flash extracting decisions, actions & flags...',
-      'Indexing results into Corporate Brain & saving whiteboard PDF...'
-    ];
-
-    let current = 1;
-    const interval = setInterval(() => {
-      current += 1;
-      if (current <= steps.length) {
-        setPipelineStep(current);
-      } else {
-        clearInterval(interval);
-        setTimeout(() => {
-          setIsProcessingPipeline(false);
-          onLeave();
-        }, 600);
-      }
-    }, 600);
+    window.setTimeout(() => {
+      setIsProcessingPipeline(false);
+      onLeave();
+    }, 900);
   };
-
-  const pipelineStages = [
-    { title: 'Audio Extraction', desc: 'ffmpeg: video -> 16kHz mono WAV' },
-    { title: 'Speaker Diarization', desc: 'PyAnnote 3.1 speaker timeline alignment' },
-    { title: 'Deepgram & Whisper ASR', desc: 'Timestamped transcript generation' },
-    { title: 'Gemini Vision Nameplates', desc: 'Extracting video frame nameplates' },
-    { title: 'Gemini Flash AI Analysis', desc: 'Extracting decisions, rationale & action items' },
-    { title: 'Knowledge Graph Ingestion', desc: 'Saving meeting intelligence & whiteboard PDF' }
-  ];
 
   return (
     <div data-meeting-recording-area className="space-y-5 p-4 pb-28 sm:p-6 sm:pb-28">
@@ -336,8 +357,19 @@ const RoomContent: React.FC<{
             </div>
           </section>
           <CollaborativeWhiteboard roomName={roomName} />
-          {showCoco && <CocoPanel />}
-          {showTranscript && <LiveTranscriptPanel transcript={liveSession.transcript} error={liveSession.captionsError || liveSession.connectionError} />}
+          {showCoco && (
+            <CocoPanel
+              minuteSummaries={liveSession.minuteSummaries}
+              missedMinuteSummaries={liveSession.missedMinuteSummaries}
+            />
+          )}
+          {showTranscript && (
+            <LiveTranscriptPanel
+              transcript={liveSession.transcript}
+              minuteSummaries={liveSession.minuteSummaries}
+              error={liveSession.captionsError || liveSession.connectionError}
+            />
+          )}
         </div>
 
         <aside className="h-fit rounded-2xl border border-slate-200 bg-white p-4 shadow-sm xl:sticky xl:top-4">
@@ -385,64 +417,31 @@ const RoomContent: React.FC<{
           inactiveIcon={isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
         />
         <MeetingRecorder roomName={roomName} onError={setMediaError} />
-        <button onClick={handleLeaveMeeting} className="flex min-w-20 flex-col items-center gap-1 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 cursor-pointer"><LogOut className="h-5 w-5" /><span>Leave</span></button>
+        <button
+          onClick={handleLeaveMeeting}
+          disabled={isProcessingPipeline}
+          className="flex min-w-20 flex-col items-center gap-1 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
+        >
+          <LogOut className="h-5 w-5" /><span>Leave</span>
+        </button>
       </div>
 
-      {/* MEETINGS/pipeline.py Auto Intelligence Extraction Modal */}
+      {/* Honest leave state: backend finalization is room-wide after everyone disconnects. */}
       {isProcessingPipeline && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md animate-fade-in font-sans">
-          <div className="w-full max-w-lg rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-2xl space-y-6">
-            <div className="flex items-center space-x-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-2xl space-y-4">
+            <div className="flex items-center space-x-3">
               <div className="p-2.5 bg-blue-50 dark:bg-blue-950/80 rounded-2xl text-blue-600 dark:text-blue-400">
                 <Sparkles className="w-6 h-6 animate-pulse" />
               </div>
               <div>
                 <h3 className="text-base font-extrabold text-slate-900 dark:text-white font-sans">
-                  Meeting Intelligence Pipeline Extraction
+                  Leaving Meeting
                 </h3>
-                <p className="text-xs text-slate-400 font-mono">
-                  Simulating MEETINGS/pipeline.py workflow
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Captured transcript content will be finalized after the room ends.
                 </p>
               </div>
-            </div>
-
-            <div className="space-y-3">
-              {pipelineStages.map((stage, idx) => {
-                const stageNum = idx + 1;
-                const isDone = pipelineStep > stageNum;
-                const isCurrent = pipelineStep === stageNum;
-                return (
-                  <div
-                    key={idx}
-                    className={`p-3 rounded-2xl border transition-all flex items-center justify-between ${
-                      isDone
-                        ? 'bg-emerald-50/60 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-200'
-                        : isCurrent
-                        ? 'bg-blue-50/80 dark:bg-blue-950/60 border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-200 shadow-sm'
-                        : 'bg-slate-50 dark:bg-slate-800/40 border-slate-100 dark:border-slate-800 text-slate-400 opacity-60'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold font-mono ${
-                        isDone
-                          ? 'bg-emerald-600 text-white'
-                          : isCurrent
-                          ? 'bg-blue-600 text-white animate-bounce'
-                          : 'bg-slate-200 dark:bg-slate-700 text-slate-500'
-                      }`}>
-                        {stageNum}
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold font-sans">{stage.title}</div>
-                        <div className="text-[10px] opacity-80 font-mono">{stage.desc}</div>
-                      </div>
-                    </div>
-
-                    {isDone && <span className="text-xs font-bold font-mono text-emerald-600">DONE</span>}
-                    {isCurrent && <span className="text-xs font-bold font-mono text-blue-600 animate-pulse">RUNNING...</span>}
-                  </div>
-                );
-              })}
             </div>
           </div>
         </div>
