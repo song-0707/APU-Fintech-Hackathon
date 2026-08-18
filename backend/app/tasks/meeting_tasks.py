@@ -167,13 +167,16 @@ def _save_and_graph(db: Session, meeting: Meeting, intelligence: MeetingIntellig
     })
     _link_participants(db, meeting.id, intelligence.participants)
 
-    graph_builder.build_from_meeting(meeting.id, meeting.title, meeting.project, intelligence, meeting.date)
+    try:
+        graph_builder.build_from_meeting(meeting.id, meeting.title, meeting.project, intelligence, meeting.date)
 
-    for flag in intelligence.flags:
-        if flag.source_decision_text and flag.contradicts_meeting_id and flag.contradicts_decision_text:
-            from_id = graph_builder.decision_node_id(meeting.id, flag.source_decision_text)
-            to_id = graph_builder.decision_node_id(flag.contradicts_meeting_id, flag.contradicts_decision_text)
-            graph_builder.write_contradiction(from_id, to_id, flag.message)
+        for flag in intelligence.flags:
+            if flag.source_decision_text and flag.contradicts_meeting_id and flag.contradicts_decision_text:
+                from_id = graph_builder.decision_node_id(meeting.id, flag.source_decision_text)
+                to_id = graph_builder.decision_node_id(flag.contradicts_meeting_id, flag.contradicts_decision_text)
+                graph_builder.write_contradiction(from_id, to_id, flag.message)
+    except Exception as exc:
+        logger.warning(f"Neo4j graph sync skipped for meeting {meeting.id} (Neo4j service offline): {exc}")
 
 
 def _process_meeting(task, meeting_id: str, run_pipeline) -> None:
