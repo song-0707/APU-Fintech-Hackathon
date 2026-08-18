@@ -282,6 +282,42 @@ const RoomContent: React.FC<{
 
       <LiveSuggestionBanner suggestions={liveSession.suggestions} onDismiss={liveSession.dismissSuggestion} />
 
+      <div className="flex w-full justify-start">
+        <section className="inline-flex max-w-full rounded-2xl border border-slate-200 bg-white/95 p-2.5 shadow-lg backdrop-blur">
+          <div className="flex w-max max-w-full gap-2.5 overflow-x-auto">
+          {participants.map((participant) => {
+            const cameraTrack = cameraTracks.find((track) => track.participant.identity === participant.identity);
+            const participantName = participant.name || participant.identity;
+            return (
+              <div
+                key={participant.identity}
+                className={`relative aspect-video w-48 shrink-0 overflow-hidden rounded-xl bg-slate-100 sm:w-56 ${
+                  participant.isSpeaking ? 'ring-2 ring-emerald-400' : 'ring-1 ring-slate-200'
+                }`}
+              >
+                {cameraTrack ? (
+                  <VideoTrack trackRef={cameraTrack} className="h-full w-full object-cover" />
+                ) : (
+                  <div className="grid h-full w-full place-items-center bg-gradient-to-br from-slate-100 to-indigo-50 text-slate-700">
+                    <div className="flex flex-col items-center gap-2">
+                      <span className="grid h-12 w-12 place-items-center rounded-full bg-indigo-600 text-lg font-bold">
+                        {participantName.charAt(0).toUpperCase()}
+                      </span>
+                      <CameraOff className="h-4 w-4 text-slate-400" />
+                    </div>
+                  </div>
+                )}
+                <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/80 to-transparent px-2.5 pb-2 pt-6">
+                  <span className="truncate text-xs font-semibold text-white">{participantName}</span>
+                  {participant.isSpeaking && <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-400" />}
+                </div>
+              </div>
+            );
+          })}
+          </div>
+        </section>
+      </div>
+
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_270px]">
         <div className="space-y-4">
           {screenTracks.length > 0 && (
@@ -309,7 +345,6 @@ const RoomContent: React.FC<{
               </div>
             </section>
           )}
-
           {/* Fullscreen Overlay when Enlarged */}
           {isScreenEnlarged && screenTracks.length > 0 && (
             <div className="fixed inset-0 z-50 flex flex-col bg-slate-950/95 p-4 sm:p-6 animate-fade-in backdrop-blur-md">
@@ -341,18 +376,14 @@ const RoomContent: React.FC<{
               </div>
             </div>
           )}
-          <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
-              {cameraTracks.length > 0 ? cameraTracks.map((track) => (
-                <div key={`${track.participant.identity}-${track.publication.trackSid}`} className="relative aspect-video overflow-hidden rounded-xl bg-slate-900">
-                  <VideoTrack trackRef={track} className="h-full w-full object-cover" />
-                  <span className="absolute bottom-2 left-2 rounded-md bg-slate-950/70 px-2 py-1 text-xs font-semibold text-white">{track.participant.name || track.participant.identity}</span>
-                </div>
-              )) : (
-                <div className="col-span-full grid min-h-52 place-items-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-sm text-slate-500">Turn on your camera to start the video grid.</div>
-              )}
-            </div>
-          </section>
+          {screenTracks.length === 0 && (
+            <section className="grid min-h-[42vh] place-items-center rounded-2xl border border-dashed border-slate-300 bg-slate-100 text-center text-sm text-slate-500 shadow-sm">
+              <div>
+                <MonitorUp className="mx-auto mb-2 h-7 w-7 text-slate-400" />
+                Share your screen to present it here.
+              </div>
+            </section>
+          )}
           {showCoco && <CocoPanel />}
           {showTranscript && <LiveTranscriptPanel transcript={liveSession.transcript} error={liveSession.captionsError || liveSession.connectionError} />}
         </div>
@@ -428,7 +459,11 @@ const RoomContent: React.FC<{
             >
               <Captions className="h-5 w-5" /><span>Transcript</span>
             </button>
-            <MeetingRecorder roomName={roomName} onError={setMediaError} variant="menu" />
+            <MeetingRecorder
+              roomName={roomName}
+              onError={setMediaError}
+              variant="menu"
+            />
           </div>
         </div>
         <button onClick={handleLeaveMeeting} className="flex min-w-20 flex-col items-center gap-1 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 cursor-pointer"><LogOut className="h-5 w-5" /><span>Leave</span></button>
@@ -499,7 +534,6 @@ const RoomContent: React.FC<{
 
 export const MeetingRoomView: React.FC = () => {
   const { currentUser } = useApp();
-  const fullscreenRootRef = useRef<HTMLDivElement>(null);
   const [roomName, setRoomName] = useState('');
   const [displayName, setDisplayName] = useState(currentUser.name);
   const [joinDetails, setJoinDetails] = useState<JoinDetails | null>(null);
@@ -508,9 +542,11 @@ export const MeetingRoomView: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
-    const updateFullscreenState = () => setIsFullscreen(document.fullscreenElement === fullscreenRootRef.current);
-    document.addEventListener('fullscreenchange', updateFullscreenState);
-    return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
+    const exitTheaterMode = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsFullscreen(false);
+    };
+    document.addEventListener('keydown', exitTheaterMode);
+    return () => document.removeEventListener('keydown', exitTheaterMode);
   }, []);
 
   const joinRoom = async (event: React.FormEvent) => {
@@ -522,16 +558,11 @@ export const MeetingRoomView: React.FC = () => {
   };
 
   const toggleFullscreen = async () => {
-    if (document.fullscreenElement === fullscreenRootRef.current) {
-      await document.exitFullscreen();
-      return;
-    }
-    if (!fullscreenRootRef.current?.requestFullscreen) throw new Error('Fullscreen is not supported by this browser.');
-    await fullscreenRootRef.current.requestFullscreen();
+    setIsFullscreen((fullscreen) => !fullscreen);
   };
 
   return (
-    <div ref={fullscreenRootRef} className={isFullscreen ? 'h-screen w-screen overflow-y-auto bg-slate-50' : ''}>
+    <div className={isFullscreen ? 'fixed inset-0 z-[100] h-screen w-screen overflow-y-auto bg-slate-50' : ''}>
       {joinDetails ? (
         <LiveKitRoom token={joinDetails.token} serverUrl={joinDetails.serverUrl} connect audio video onError={(roomError) => setError(roomError.message)}>
           <RoomAudioRenderer />
@@ -542,7 +573,7 @@ export const MeetingRoomView: React.FC = () => {
             isFullscreen={isFullscreen}
             onToggleFullscreen={toggleFullscreen}
             onLeave={() => {
-              if (document.fullscreenElement === fullscreenRootRef.current) void document.exitFullscreen();
+              setIsFullscreen(false);
               setJoinDetails(null);
               setError('');
             }}
