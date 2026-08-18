@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { MeetingIntelligenceOverview } from './MeetingIntelligenceOverview';
+import { IntelligenceSection, MeetingIntelligenceOverview } from './MeetingIntelligenceOverview';
 import { MeetingDetailView } from './MeetingDetailView';
 import { Meeting } from '../types';
 
@@ -12,6 +12,7 @@ export const MeetingIntelligenceView: React.FC = () => {
   const { meetings, currentUser, openDmWithUser, selectedMeetingId, setSelectedMeetingId } = useApp();
 
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
+  const [activeSection, setActiveSection] = useState<IntelligenceSection>('meetings');
 
   const handleSelectMeeting = (meeting: Meeting) => {
     setSelectedMeeting(meeting);
@@ -41,8 +42,9 @@ export const MeetingIntelligenceView: React.FC = () => {
       ) : (
         <MeetingIntelligenceOverview
           meetings={meetings}
+          activeSection={activeSection}
+          onSectionChange={setActiveSection}
           onSelectMeeting={handleSelectMeeting}
-          onSelectMeetingId={setSelectedMeetingId}
         />
       )}
     </div>
