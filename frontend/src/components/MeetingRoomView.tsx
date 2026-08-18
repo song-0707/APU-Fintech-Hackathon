@@ -17,6 +17,7 @@ import {
   Mic,
   MicOff,
   Minimize2,
+  MoreHorizontal,
   MonitorUp,
   Send,
   Sparkles,
@@ -186,7 +187,25 @@ const RoomContent: React.FC<{
   const [isScreenEnlarged, setIsScreenEnlarged] = useState(false);
   const [isProcessingPipeline, setIsProcessingPipeline] = useState(false);
   const [pipelineStep, setPipelineStep] = useState(0);
+  const [showSecondaryMenu, setShowSecondaryMenu] = useState(false);
+  const secondaryMenuRef = useRef<HTMLDivElement>(null);
   const liveSession = useLiveMeetingSession(roomName, token);
+
+  useEffect(() => {
+    if (!showSecondaryMenu) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!secondaryMenuRef.current?.contains(event.target as Node)) setShowSecondaryMenu(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowSecondaryMenu(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [showSecondaryMenu]);
 
   const toggle = async (kind: 'microphone' | 'camera' | 'screen') => {
     try {
@@ -351,31 +370,14 @@ const RoomContent: React.FC<{
         </aside>
       </div>
 
-      <div className={`fixed bottom-3 z-40 flex w-max flex-nowrap items-center justify-center gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-lg backdrop-blur ${
+      <div className={`fixed bottom-3 z-40 flex w-max flex-nowrap items-center justify-center gap-2 overflow-visible rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-lg backdrop-blur ${
         isFullscreen
           ? 'left-1/2 max-w-[calc(100%-1.5rem)] -translate-x-1/2'
           : 'left-[calc(50%+9rem)] max-w-[calc(100%-19.5rem)] -translate-x-1/2'
       }`}>
         <ToggleButton label="Mic" enabled={isMicrophoneEnabled} onClick={() => void toggle('microphone')} icon={<Mic className="h-5 w-5" />} inactiveIcon={<MicOff className="h-5 w-5" />} />
         <ToggleButton label="Camera" enabled={isCameraEnabled} onClick={() => void toggle('camera')} icon={<Camera className="h-5 w-5" />} inactiveIcon={<CameraOff className="h-5 w-5" />} />
-        <button
-          onClick={() => setShowCoco((v) => !v)}
-          className={`flex min-w-20 flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
-            showCoco ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-          }`}
-        >
-          <Sparkles className="h-5 w-5" /><span>Coco</span>
-        </button>
-        <button
-          onClick={() => { setShowTranscript((v) => !v); liveSession.toggleCaptions(); }}
-          className={`flex min-w-20 flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
-            liveSession.captionsEnabled ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-          }`}
-        >
-          <Captions className="h-5 w-5" /><span>Transcript</span>
-        </button>
         <ToggleButton label="Share" enabled={isScreenShareEnabled} onClick={() => void toggle('screen')} icon={<MonitorUp className="h-5 w-5" />} inactiveIcon={<MonitorUp className="h-5 w-5" />} />
-        <MeetingRecorder roomName={roomName} onError={setMediaError} />
         <ToggleButton
           label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
           enabled
@@ -383,6 +385,52 @@ const RoomContent: React.FC<{
           icon={isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
           inactiveIcon={isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
         />
+        <div ref={secondaryMenuRef} className="relative shrink-0">
+          <button
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={showSecondaryMenu}
+            onClick={() => setShowSecondaryMenu((visible) => !visible)}
+            className={`flex min-w-20 flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
+              showSecondaryMenu || showCoco || liveSession.captionsEnabled
+                ? 'bg-indigo-600 text-white'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            <MoreHorizontal className="h-5 w-5" /><span>More</span>
+          </button>
+          <div
+            role="menu"
+            aria-hidden={!showSecondaryMenu}
+            className={`absolute bottom-full right-0 mb-3 w-52 space-y-1.5 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl transition-all ${
+              showSecondaryMenu
+                ? 'visible translate-y-0 opacity-100'
+                : 'pointer-events-none invisible translate-y-2 opacity-0'
+            }`}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setShowCoco((visible) => !visible); setShowSecondaryMenu(false); }}
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition-colors ${
+                showCoco ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <Sparkles className="h-5 w-5" /><span>Coco</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setShowTranscript((visible) => !visible); liveSession.toggleCaptions(); setShowSecondaryMenu(false); }}
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition-colors ${
+                liveSession.captionsEnabled ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <Captions className="h-5 w-5" /><span>Transcript</span>
+            </button>
+            <MeetingRecorder roomName={roomName} onError={setMediaError} variant="menu" />
+          </div>
+        </div>
         <button onClick={handleLeaveMeeting} className="flex min-w-20 flex-col items-center gap-1 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 cursor-pointer"><LogOut className="h-5 w-5" /><span>Leave</span></button>
       </div>
 
