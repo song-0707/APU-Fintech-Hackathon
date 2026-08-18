@@ -22,6 +22,8 @@ from app.core.logger import get_logger
 from app.database.session import SessionLocal
 from app.graph import contradiction_service
 from app.models.meeting import Meeting
+from app.services.gemini_client import generate_content, has_gemini_credentials
+from app.services.gemini_service import _clean_action_task, _has_action_verb, _is_agenda_statement
 from app.services import live_transcription_service
 from app.services.storage_service import StorageService
 from app.tasks.meeting_tasks import process_live_meeting_task
@@ -51,11 +53,22 @@ _DECISION_KEYWORDS = (
     "agreed", "final", "approved", "approve", "moving forward with",
     "let's do", "lets do",
 )
+_ACTION_COMMITMENT_RE = re.compile(
+    r"\b(action item|i will|i'll|i am going to|i'm going to|we will|we'll|"
+    r"need to|needs to|please)\b",
+    re.IGNORECASE,
+)
 
 
 def _looks_decision_like(text: str) -> bool:
     lowered = text.lower()
     return any(keyword in lowered for keyword in _DECISION_KEYWORDS)
+
+
+def _looks_action_like(text: str) -> bool:
+    if _is_agenda_statement(text):
+        return False
+    return bool(_ACTION_COMMITMENT_RE.search(text) and _has_action_verb(text))
 
 
 def _window_index(start_seconds: float) -> int:
@@ -93,11 +106,6 @@ def _guess_assignee(text: str, speaker: str, speakers: list[str]) -> str:
     if re.search(r"\b(i|i'll|i will|i can)\b", lowered):
         return speaker
     return speaker
-
-
-def _extract_action_task(text: str) -> str:
-    cleaned = re.sub(r"^\s*action item\s*:\s*", "", text, flags=re.IGNORECASE).strip()
-    return cleaned or text.strip()
 
 
 class TranscriptSoFarResponse(BaseModel):
@@ -164,9 +172,9 @@ def _fallback_minute_intelligence(room_name: str, minute_index: int, segments: l
         speaker = str(segment.get("speaker") or "")
         if _looks_decision_like(text):
             decisions.append(text)
-        if any(keyword in lowered for keyword in ("action item", "i will", "i'll", "need to", "needs to", "follow up", "send", "prepare")):
+        if not _looks_decision_like(text) and _looks_action_like(text):
             action_items.append(LiveActionItem(
-                task=_extract_action_task(text),
+                task=_clean_action_task(text),
                 assignee=_guess_assignee(text, speaker, speakers),
                 deadline="",
                 priority="medium",
@@ -202,17 +210,20 @@ def _extract_minute_intelligence(room_name: str, minute_index: int, segments: li
     extraction on any failure. The final, canonical meeting intelligence is
     still generated after the room ends.
     """
-    if settings.demo_mode or not settings.gemini_api_key:
+    if settings.demo_mode or not has_gemini_credentials():
         return _fallback_minute_intelligence(room_name, minute_index, segments)
 
     start, end = _window_bounds(minute_index)
     transcript_text = "\n".join(_line_for_segment(segment) for segment in segments)
     try:
-        from google import genai
-
-        client = genai.Client(api_key=settings.gemini_api_key)
         prompt = f"""You are extracting provisional live meeting intelligence for one completed time window.
 Use only the transcript window below. Do not invent facts.
+Only create an action item when the transcript contains a concrete commitment
+to do future work. Do not create action items from agenda/topic statements
+such as "we are going to discuss the task next week".
+Normalize first-person commitments into task text, e.g. "I am going to present
+the project of customer feedback to CEO next week" becomes
+"Present customer feedback project to CEO next week".
 Return valid JSON with exactly these fields:
 {{
   "summary": "one concise sentence",
@@ -224,12 +235,18 @@ Return valid JSON with exactly these fields:
 Transcript window {minute_index} ({_format_elapsed(start)}-{_format_elapsed(end)}):
 {transcript_text}
 """
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
+        response = generate_content(
+            model=settings.gemini_model,
             contents=prompt,
             config={"response_mime_type": "application/json"},
         )
         data = json.loads((response.text or "{}").strip())
+        action_items: list[LiveActionItem] = []
+        for item in (data.get("action_items") or [])[:5]:
+            parsed = LiveActionItem.model_validate(item)
+            parsed.task = _clean_action_task(parsed.task)
+            if _has_action_verb(parsed.task) and not _is_agenda_statement(parsed.task):
+                action_items.append(parsed)
         return LiveMinuteIntelligence(
             id=f"{room_name}-minute-{minute_index}",
             room_name=room_name,
@@ -239,7 +256,7 @@ Transcript window {minute_index} ({_format_elapsed(start)}-{_format_elapsed(end)
             label=f"{_format_elapsed(start)}-{_format_elapsed(end)}",
             summary=str(data.get("summary") or "").strip() or "No summary extracted for this window.",
             decisions=[str(item) for item in data.get("decisions") or []][:5],
-            action_items=[LiveActionItem.model_validate(item) for item in (data.get("action_items") or [])[:5]],
+            action_items=action_items,
             risks=[str(item) for item in data.get("risks") or []][:5],
             segment_count=len(segments),
         )

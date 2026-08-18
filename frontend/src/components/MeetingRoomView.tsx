@@ -102,7 +102,7 @@ const liveAnswer = (query: string, liveSummaries: LiveMinuteSummary[], missedSum
 
   if (source.length === 0) {
     return {
-      answer: 'I do not have enough live meeting context yet. Turn on Live Transcript and wait for the first minute summary.',
+      answer: 'I do not have enough live meeting context yet. Keep the microphone unmuted and wait for the first minute summary.',
       citations: [],
     };
   }
@@ -237,6 +237,7 @@ const RoomContent: React.FC<{
   const [isScreenEnlarged, setIsScreenEnlarged] = useState(false);
   const [isProcessingPipeline, setIsProcessingPipeline] = useState(false);
   const liveSession = useLiveMeetingSession(roomName, token);
+  const meetingServiceError = mediaError || liveSession.captionsError || liveSession.connectionError;
 
   const toggle = async (kind: 'microphone' | 'camera' | 'screen') => {
     try {
@@ -281,7 +282,7 @@ const RoomContent: React.FC<{
         <span className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600"><Users className="h-4 w-4 text-indigo-600" />{participants.length} participant{participants.length === 1 ? '' : 's'}</span>
       </div>
 
-      {mediaError && <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{mediaError}</div>}
+      {meetingServiceError && <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{meetingServiceError}</div>}
 
       <LiveSuggestionBanner suggestions={liveSession.suggestions} onDismiss={liveSession.dismissSuggestion} />
 
@@ -401,9 +402,9 @@ const RoomContent: React.FC<{
           <Sparkles className="h-5 w-5" /><span>Coco</span>
         </button>
         <button
-          onClick={() => { setShowTranscript((v) => !v); liveSession.toggleCaptions(); }}
+          onClick={() => setShowTranscript((v) => !v)}
           className={`flex min-w-20 flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
-            liveSession.captionsEnabled ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            showTranscript ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
           }`}
         >
           <Captions className="h-5 w-5" /><span>Transcript</span>

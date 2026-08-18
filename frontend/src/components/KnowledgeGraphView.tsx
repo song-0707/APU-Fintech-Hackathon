@@ -81,6 +81,11 @@ function realIdentifierFor(node: GraphNode): string {
   return idx === -1 ? node.id : node.id.slice(idx + 1);
 }
 
+function endpointId(endpoint: string | { id?: string } | null | undefined): string {
+  if (!endpoint) return '';
+  return typeof endpoint === 'string' ? endpoint : endpoint.id || '';
+}
+
 export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   data,
   meetings,
@@ -120,6 +125,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   );
 
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  const [draggedNode, setDraggedNode] = useState<GraphNode | null>(null);
   const [isCopied, setIsCopied] = useState(false);
   const [showMessageModal, setShowMessageModal] = useState(false);
   const [messageText, setMessageText] = useState('');
@@ -204,6 +210,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   // Configure force layout parameters & auto zoom-to-fit when active graph data changes
   useEffect(() => {
     setSelectedNode(null);
+    setDraggedNode(null);
     setShowMessageModal(false);
 
     if (fgRef.current) {
@@ -259,6 +266,18 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
     }
     return results;
   }, [selectedNode, activeGraphData]);
+
+  const dragFocusNodeIds = useMemo(() => {
+    if (!draggedNode) return null;
+    const focused = new Set<string>([draggedNode.id]);
+    for (const link of activeGraphData.links) {
+      const sourceId = endpointId(link.source as any);
+      const targetId = endpointId(link.target as any);
+      if (sourceId === draggedNode.id) focused.add(targetId);
+      if (targetId === draggedNode.id) focused.add(sourceId);
+    }
+    return focused;
+  }, [draggedNode, activeGraphData]);
 
   const handleCopyContact = () => {
     if (!selectedNode) return;
@@ -379,18 +398,30 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
           graphData={activeGraphData}
           cooldownTicks={100}
           d3VelocityDecay={0.3}
-          nodeRelSize={6}
+          nodeRelSize={7}
           onNodeClick={handleNodeClick}
+          onNodeDrag={(node: any) => setDraggedNode(node as GraphNode)}
+          onNodeDragEnd={() => setDraggedNode(null)}
           nodeLabel={(node: any) => `${labelOverrides[node.id] ?? node.name} (${styleFor(node.type).label})`}
           nodeColor={(node: any) => node.color || styleFor(node.type).color}
           linkLabel={(link: any) => link.isContradiction ? `⚠ CONTRADICTS — ${link.message || link.label || ''}` : (link.label || '')}
-          linkColor={(link: any) => link.isContradiction ? '#ef4444' : '#94a3b8'}
+          linkColor={(link: any) => {
+            if (!dragFocusNodeIds) return link.isContradiction ? '#ef4444' : '#94a3b8';
+            const isFocused = dragFocusNodeIds.has(endpointId(link.source)) && dragFocusNodeIds.has(endpointId(link.target));
+            if (!isFocused) return 'rgba(148, 163, 184, 0.14)';
+            return link.isContradiction ? '#ef4444' : '#64748b';
+          }}
           linkLineDash={(link: any) => link.isContradiction ? [4, 2] : null}
-          linkWidth={(link: any) => link.isContradiction ? 2.5 : 1.5}
+          linkWidth={(link: any) => {
+            if (!dragFocusNodeIds) return link.isContradiction ? 2.5 : 1.5;
+            const isFocused = dragFocusNodeIds.has(endpointId(link.source)) && dragFocusNodeIds.has(endpointId(link.target));
+            return isFocused ? (link.isContradiction ? 2.8 : 1.8) : 0.6;
+          }}
           backgroundColor="transparent"
           nodeCanvasObject={(node: any, ctx, globalScale) => {
             const style = styleFor(node.type);
             const isSelected = selectedNode?.id === node.id;
+            const isDragFocused = !dragFocusNodeIds || dragFocusNodeIds.has(node.id);
             // Full name is always in the hover tooltip (nodeLabel) and the
             // detail panel — the canvas label is truncated and only drawn
             // past a zoom threshold (or for the selected node) so a graph
@@ -403,7 +434,12 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
             // World-space draws scale with zoom by default (that's how the
             // giant-circle bug happened) — dividing by globalScale, same as
             // fontSize above, keeps the node's on-screen size constant.
-            const radius = 7 / globalScale;
+            const radius = (isSelected || draggedNode?.id === node.id ? 11 : 9) / globalScale;
+
+            ctx.save();
+            if (!isDragFocused) {
+              ctx.globalAlpha = 0.18;
+            }
 
             // Node Circle
             ctx.beginPath();
@@ -422,7 +458,10 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
             ctx.fillStyle = '#ffffff';
             ctx.fillText(style.tag, node.x, node.y);
 
-            if (!showLabel) return;
+            if (!showLabel) {
+              ctx.restore();
+              return;
+            }
 
             ctx.font = `${fontSize}px Inter, sans-serif`;
             const textWidth = ctx.measureText(label).width;
@@ -440,6 +479,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
 
             ctx.fillStyle = '#1e293b';
             ctx.fillText(label, node.x, labelY + bckgDimensions[1] / 2);
+            ctx.restore();
           }}
         />
       )}

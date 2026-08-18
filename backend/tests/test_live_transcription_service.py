@@ -73,3 +73,32 @@ def test_read_results_flushes_buffer_on_utterance_end_event():
 
     assert results.qsize() == 1
     assert results.get_nowait() == "I will prepare the vendor checklist"
+
+
+def test_read_results_handles_list_wrapped_deepgram_events():
+    messages = [
+        json.dumps([
+            {"type": "Metadata"},
+            {"channel": {"alternatives": [{"transcript": "List wrapped transcript"}]}, "is_final": True, "speech_final": True},
+        ]),
+    ]
+    fake_ws = _FakeDeepgramSocket(messages)
+    results: asyncio.Queue = asyncio.Queue()
+
+    asyncio.run(live_transcription_service._read_results(fake_ws, results))
+
+    assert results.qsize() == 1
+    assert results.get_nowait() == "List wrapped transcript"
+
+
+def test_read_results_handles_nested_alternative_lists():
+    messages = [
+        json.dumps({"channel": {"alternatives": [[{"transcript": "Nested transcript"}]]}, "is_final": True, "speech_final": True}),
+    ]
+    fake_ws = _FakeDeepgramSocket(messages)
+    results: asyncio.Queue = asyncio.Queue()
+
+    asyncio.run(live_transcription_service._read_results(fake_ws, results))
+
+    assert results.qsize() == 1
+    assert results.get_nowait() == "Nested transcript"

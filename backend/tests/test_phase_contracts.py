@@ -5,7 +5,7 @@ from app.models.employee import Employee, MeetingParticipant
 from app.models.meeting import Meeting
 from app.schemas.meeting_intelligence import Decision, MeetingAnalysis
 from app.services import askcoco_service
-from app.services.gemini_service import parse_analysis_response
+from app.services.gemini_service import fallback_analysis, parse_analysis_response, postprocess_analysis_dict
 from app.services.storage_service import StorageService
 from app.tasks import meeting_tasks
 
@@ -87,6 +87,58 @@ def test_gemini_response_is_repaired_and_validated():
 
     assert analysis.summary == "Budget approved"
     assert analysis.decisions[0].title == "Approve budget"
+
+
+def test_fallback_does_not_turn_agenda_topic_into_action_item():
+    analysis = fallback_analysis(
+        "\n".join(
+            [
+                "[00:00:01] Thim Yee Song: Today we are going to discuss about the task next week",
+                "[00:00:08] Thim Yee Song: I am going to present the project of customer feedback to CEO next week",
+            ]
+        ),
+        [],
+    )
+
+    assert [item["task"] for item in analysis["action_items"]] == [
+        "Present customer feedback project to CEO next week"
+    ]
+    assert analysis["participants"] == ["Thim Yee Song"]
+
+
+def test_postprocess_removes_hallucinated_graph_entities():
+    analysis = postprocess_analysis_dict(
+        {
+            "summary": "Customer feedback presentation was discussed.",
+            "participants": ["Thim Yee Song"],
+            "speaker_map": {},
+            "decisions": [],
+            "action_items": [
+                {
+                    "task": "the task next week. So I'm going to to",
+                    "assignee": "Thim Yee Song",
+                    "deadline": "",
+                    "priority": "medium",
+                }
+            ],
+            "risks": [],
+            "knowledge_triples": [
+                {
+                    "subject": "Task Network Model",
+                    "subject_type": "System",
+                    "predicate": "MENTIONED_IN",
+                    "object": "Customer Feedback Project",
+                    "object_type": "Project",
+                }
+            ],
+        },
+        "Today we are going to discuss about the task next week. "
+        "I am going to present the project of customer feedback to CEO next week.",
+        ["Thim Yee Song"],
+    )
+
+    assert analysis["action_items"] == []
+    assert analysis["knowledge_triples"] == []
 
 
 def test_ask_coco_uses_predefined_action_item_query(monkeypatch):

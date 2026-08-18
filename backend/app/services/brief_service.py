@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.graph.neo4j_service import run_query
 from app.models.employee import Employee, MeetingParticipant
+from app.services.gemini_client import generate_content, has_gemini_credentials
 from app.services.storage_service import StorageService
 
 logger = get_logger(__name__)
@@ -100,11 +101,8 @@ def _suggested_agenda(decisions: list[dict], action_items: list[dict], contradic
     convention used everywhere else in this codebase."""
     if not (decisions or action_items or contradictions):
         return []
-    if settings.gemini_api_key:
+    if has_gemini_credentials():
         try:
-            from google import genai
-
-            client = genai.Client(api_key=settings.gemini_api_key)
             prompt = f"""You are drafting a short suggested agenda for an upcoming meeting,
 using only the data below from related previous meetings. Do not invent
 facts not present in the data. Return 2-4 short bullet points, one per
@@ -114,7 +112,7 @@ Decisions: {decisions[:10]}
 Action items: {action_items[:10]}
 Contradictions: {contradictions[:5]}
 """
-            response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+            response = generate_content(model=settings.gemini_model, contents=prompt)
             text = (response.text or "").strip()
             if text:
                 return [line.strip("- ").strip() for line in text.splitlines() if line.strip()]

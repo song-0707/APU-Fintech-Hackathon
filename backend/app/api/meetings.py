@@ -100,16 +100,14 @@ def delete_meeting(
         raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
     require_meeting_access(db, meeting_id, caller)
 
-    # Neo4j/Chroma may legitimately be down in local dev (same tolerance as
-    # main.py's startup constraint setup and askcoco_service's graph
-    # fallback) — log and keep going rather than blocking the SQL delete,
-    # since leaving the meeting stuck forever because a side-store is
-    # offline is worse than a stale node/embedding the next successful
-    # delete-retry (or manual cleanup) can still catch.
+    # Graph cleanup must succeed before deleting the SQL row. Otherwise the
+    # UI can lose the meeting from the list while stale nodes remain visible
+    # in Memory Graph with no normal delete path left.
     try:
         graph_builder.delete_meeting(meeting_id)
     except Exception as exc:
-        logger.warning(f"Meeting {meeting_id}: graph cleanup failed: {exc}")
+        logger.error(f"Meeting {meeting_id}: graph cleanup failed: {exc}")
+        raise HTTPException(status_code=503, detail="Graph cleanup failed; meeting was not deleted. Please retry.")
 
     try:
         embedding_service.delete_meeting(meeting_id)

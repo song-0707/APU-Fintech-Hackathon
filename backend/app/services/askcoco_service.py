@@ -23,6 +23,7 @@ from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.graph.neo4j_service import run_query
 from app.services import embedding_service
+from app.services.gemini_client import generate_content, has_gemini_credentials
 from app.services.storage_service import StorageService
 
 logger = get_logger(__name__)
@@ -44,6 +45,32 @@ _SEMANTIC_DISTANCE_THRESHOLD = 0.8
 # whenever nothing was retrieved, and given to Gemini as the required
 # wording when the answer isn't in the provided context.
 _NO_CONTEXT_ANSWER = "I don't have enough meeting context to answer that."
+
+# Bare smalltalk ("hi", "thanks") has almost no semantic content, so a
+# nearest-neighbor vector search over it doesn't reliably land above
+# _SEMANTIC_DISTANCE_THRESHOLD the way a genuinely off-topic *sentence*
+# does — it can score "close enough" to arbitrary stored decisions on a
+# small demo corpus and return them as if they were a real answer. Catch
+# smalltalk before any retrieval runs at all. Exact-match (not `in`, unlike
+# every other keyword list here) so a real question that happens to start
+# with "hi" or "thanks" still reaches the templates/semantic search below.
+_GREETINGS = (
+    "hi", "hello", "hey", "hiya", "yo", "howdy", "greetings",
+    "good morning", "good afternoon", "good evening",
+    "what's up", "whats up", "sup",
+    "thanks", "thank you", "thx", "cheers",
+    "bye", "goodbye", "see you", "see ya",
+)
+_GREETING_ANSWER = (
+    "Hi! Ask me about decisions, action items, contradictions, participants, "
+    "or a specific meeting — e.g. \"what are my open action items\" or "
+    "\"summarize the Vendor Contract Review meeting\"."
+)
+
+
+def _is_greeting(query: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9' ]", "", query.lower()).strip()
+    return normalized in _GREETINGS
 
 # Meeting summaries only ever get written to storage/summaries/{id}.json
 # (graph_builder only puts id/title on the Meeting node, never the summary
@@ -359,12 +386,9 @@ def _synthesize_with_gemini(query: str, retrieved_context: list[dict]) -> str | 
     so without that instruction something said in a meeting could otherwise
     read as an instruction to the model. Returns None on any failure so the
     caller can fall back to the deterministic formatter."""
-    if not settings.gemini_api_key:
+    if not has_gemini_credentials():
         return None
     try:
-        from google import genai
-
-        client = genai.Client(api_key=settings.gemini_api_key)
         prompt = f"""You are Ask Coco, a meeting intelligence assistant.
 
 Answer using only the provided meeting context.
@@ -384,7 +408,7 @@ Meeting context:
 
 Answer:
 """
-        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        response = generate_content(model=settings.gemini_model, contents=prompt)
         text = (response.text or "").strip()
         return text or None
     except Exception as exc:
@@ -400,6 +424,9 @@ def ask(query: str, meeting_ids: "set[str] | None" = None) -> dict:
     app/api/query.py the same way every other locked-down endpoint does."""
     if not query.strip():
         return {"answer": "Please ask a question.", "results": [], "cypher": "", "citations": []}
+
+    if _is_greeting(query):
+        return {"answer": _GREETING_ANSWER, "results": [], "cypher": "", "citations": []}
 
     if meeting_ids is not None and not meeting_ids:
         # Recognized caller, zero accessible meetings -- nothing to

@@ -222,6 +222,31 @@ def test_live_minute_intelligence_fallback_extracts_window():
     assert item.risks
 
 
+def test_live_minute_fallback_skips_agenda_and_keeps_concrete_commitment():
+    item = live_meeting._fallback_minute_intelligence(
+        "room",
+        0,
+        [
+            {
+                "speaker": "Thim Yee Song",
+                "text": "Today we are going to discuss about the task next week",
+                "start": 2.0,
+                "timestamp": "10:00:02",
+            },
+            {
+                "speaker": "Thim Yee Song",
+                "text": "I am going to present the project of customer feedback to CEO next week",
+                "start": 12.0,
+                "timestamp": "10:00:12",
+            },
+        ],
+    )
+
+    assert [action.task for action in item.action_items] == [
+        "Present customer feedback project to CEO next week"
+    ]
+
+
 def test_analyze_due_minute_windows_stores_summary(monkeypatch):
     monkeypatch.setattr(settings, "demo_mode", True)
     monkeypatch.setattr(live_meeting, "_MINUTE_WINDOW_SECONDS", 60.0)

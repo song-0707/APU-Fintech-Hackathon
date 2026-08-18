@@ -54,6 +54,35 @@ def _buffer_word_count(buffer: list[str]) -> int:
     return sum(len(part.split()) for part in buffer)
 
 
+def _as_event(raw_data) -> dict | None:
+    if isinstance(raw_data, dict):
+        return raw_data
+    if isinstance(raw_data, list):
+        for item in raw_data:
+            if isinstance(item, dict) and "channel" in item:
+                return item
+        for item in raw_data:
+            if isinstance(item, dict) and ("channel" in item or "type" in item):
+                return item
+    return None
+
+
+def _first_alternative(channel) -> dict:
+    if not isinstance(channel, dict):
+        return {}
+    alternatives = channel.get("alternatives")
+    if not isinstance(alternatives, list) or not alternatives:
+        return {}
+    first = alternatives[0]
+    if isinstance(first, dict):
+        return first
+    if isinstance(first, list):
+        for item in first:
+            if isinstance(item, dict):
+                return item
+    return {}
+
+
 async def _read_results(ws, results: "asyncio.Queue[str]") -> None:
     """Queue durable utterances, not every finalized ASR fragment.
 
@@ -66,8 +95,10 @@ async def _read_results(ws, results: "asyncio.Queue[str]") -> None:
     try:
         async for raw in ws:
             try:
-                data = json.loads(raw)
+                data = _as_event(json.loads(raw))
             except json.JSONDecodeError:
+                continue
+            if data is None:
                 continue
 
             if data.get("type") == "UtteranceEnd":
@@ -77,8 +108,7 @@ async def _read_results(ws, results: "asyncio.Queue[str]") -> None:
             channel = data.get("channel")
             if not channel:
                 continue
-            alternatives = channel.get("alternatives") or [{}]
-            text = str(alternatives[0].get("transcript", "")).strip()
+            text = str(_first_alternative(channel).get("transcript", "")).strip()
             if text and data.get("is_final"):
                 buffer.append(text)
 

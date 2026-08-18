@@ -189,3 +189,31 @@ def test_empty_template_results_refuse_without_calling_gemini(monkeypatch):
     assert result["results"] == []
     assert result["citations"] == []
     assert called["gemini"] is False
+
+
+def test_bare_greeting_gets_a_canned_reply_without_any_retrieval(monkeypatch):
+    """Regression test: "hi" used to fall through every _TEMPLATES keyword,
+    then _semantic_expand's nearest-neighbor search would score it "close
+    enough" to real decisions on this small demo corpus and return them —
+    a random meeting-data dump in response to a greeting."""
+    called = {"query": False, "snippets": False, "decisions": False}
+
+    monkeypatch.setattr(askcoco_service, "run_query", lambda *a, **k: called.__setitem__("query", True) or [])
+    monkeypatch.setattr(embedding_service, "query_snippets", lambda *a, **k: called.__setitem__("snippets", True) or {"documents": [[]], "metadatas": [[]], "distances": [[]]})
+    monkeypatch.setattr(embedding_service, "query_similar_decisions", lambda *a, **k: called.__setitem__("decisions", True) or [])
+
+    for greeting in ["hi", "Hi!", "  hello  ", "THANKS", "what's up"]:
+        result = askcoco_service.ask(greeting, meeting_ids={"m1"})
+        assert result["answer"] == askcoco_service._GREETING_ANSWER
+        assert result["results"] == []
+        assert result["citations"] == []
+
+    assert called == {"query": False, "snippets": False, "decisions": False}
+
+
+def test_greeting_word_inside_a_real_question_still_retrieves(monkeypatch):
+    """Exact-match, not substring — "hi" as a standalone message is
+    smalltalk, but a real question that happens to start with a greeting
+    word must still reach the normal template/semantic path."""
+    result = askcoco_service.ask("hi, what decisions were made?", meeting_ids={"m1"})
+    assert result["answer"] != askcoco_service._GREETING_ANSWER

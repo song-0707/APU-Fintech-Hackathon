@@ -31,7 +31,6 @@ export type LiveMeetingSessionState = {
   connectionError: string;
   captionsEnabled: boolean;
   captionsError: string;
-  toggleCaptions: () => void;
   transcript: CaptionLine[];
   minuteSummaries: LiveMinuteSummary[];
   missedMinuteSummaries: LiveMinuteSummary[];
@@ -98,7 +97,10 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
 
     ws.onopen = () => {
       setConnectionError('');
+      setCaptionsError('');
       ws.send(JSON.stringify({ type: 'auth', token }));
+      ws.send(JSON.stringify({ type: 'captions_on' }));
+      setCaptionsEnabled(true);
     };
 
     ws.onmessage = (event) => {
@@ -192,34 +194,17 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
     recorderRef.current = null;
   }, []);
 
-  const toggleCaptions = useCallback(() => {
-    setCaptionsEnabled((enabled) => {
-      const next = !enabled;
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return enabled;
-
-      if (next) {
-        setCaptionsError('');
-        ws.send(JSON.stringify({ type: 'captions_on' }));
-      } else {
-        ws.send(JSON.stringify({ type: 'captions_off' }));
-        stopCapture();
-      }
-      return next;
-    });
-  }, [stopCapture]);
-
   const localMicPublication = localParticipant.getTrackPublication(Track.Source.Microphone);
   const localMicTrack = localMicPublication?.track;
   const micTrackSid = localMicPublication?.trackSid ?? localMicTrack?.sid;
 
-  // Must respect LiveKit mute state: stop sending audio (and flip captions
-  // off) the moment the mic is muted, not just stop what other
-  // participants hear.
+  // Must respect LiveKit mute state: stop sending audio while muted, then
+  // resume automatically when the participant unmutes. The Deepgram session
+  // stays alive via backend keepalives so transcription remains automatic.
   useEffect(() => {
     if (!captionsEnabled) return;
     if (!isMicrophoneEnabled) {
-      toggleCaptions();
+      stopCapture();
       return;
     }
 
@@ -258,7 +243,6 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
     connectionError,
     captionsEnabled,
     captionsError,
-    toggleCaptions,
     transcript,
     minuteSummaries,
     missedMinuteSummaries,
