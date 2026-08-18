@@ -5,9 +5,8 @@ import { MeetingDetailView } from './MeetingDetailView';
 import { Meeting } from '../types';
 
 export const MeetingIntelligenceView: React.FC = () => {
-  const { meetings, currentUser, openDmWithUser } = useApp();
+  const { meetings, currentUser, openDmWithUser, selectedMeetingId, setSelectedMeetingId } = useApp();
 
-  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
 
   // Strict user-based filtering: ONLY show meetings where currentUser is in participants!

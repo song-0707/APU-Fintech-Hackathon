@@ -495,6 +495,12 @@ interface AppContextType {
   activeTab: TabType;
   setActiveTab: (tab: TabType) => void;
 
+  // Shared across DashboardView and MeetingIntelligenceView so a click from
+  // the dashboard can open a specific meeting's detail view directly instead
+  // of always landing on the meeting list/decision timeline first.
+  selectedMeetingId: string | null;
+  setSelectedMeetingId: (id: string | null) => void;
+
   employees: Employee[];
   meetings: Meeting[];
   contradictions: Contradiction[];
@@ -502,6 +508,7 @@ interface AppContextType {
   personalDashboard: api.BackendDashboard | null;
   toggleActionItem: (id: string) => void;
   processAudioForMeeting: (meetingId: string, file: File | { name: string; size?: number }) => void;
+  deleteMeeting: (meetingId: string) => Promise<void>;
   addMeeting: (meetingData: {
     title: string;
     description: string;
@@ -541,7 +548,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
-  
+  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
+
   const [employees] = useState<Employee[]>(initialEmployees);
   const [meetings, setMeetings] = useState<Meeting[]>(initialMeetings);
   const [contradictions] = useState<Contradiction[]>(initialContradictions);
@@ -723,6 +731,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setNotifications(prev => [...completionNotifications, ...prev]);
     }
+  };
+
+  /** Deletes on the backend first (SQL row + Neo4j graph + Chroma embeddings
+   * + stored files, per DELETE /meeting/{id}) and only drops it from local
+   * state once that succeeds — an unreachable backend should surface as an
+   * error to the caller, not a meeting that looks deleted here but still
+   * exists server-side. */
+  const deleteMeeting = async (meetingId: string): Promise<void> => {
+    await api.deleteMeeting(meetingId);
+    setMeetings(prev => prev.filter(m => m.id !== meetingId));
+    setSelectedMeetingId(prev => (prev === meetingId ? null : prev));
   };
 
   const processAudioForMeeting = (meetingId: string, file: File | { name: string; size?: number }) => {
@@ -1109,6 +1128,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout,
         activeTab,
         setActiveTab,
+        selectedMeetingId,
+        setSelectedMeetingId,
         employees,
         meetings,
         contradictions,
@@ -1116,6 +1137,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         personalDashboard,
         toggleActionItem,
         processAudioForMeeting,
+        deleteMeeting,
         addMeeting,
         notifications: userNotifications,
         unreadCount: userUnreadCount,

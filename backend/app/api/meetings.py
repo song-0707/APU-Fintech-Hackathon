@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logger import get_logger
 from app.database.session import get_db
+from app.graph import graph_builder
 from app.models.meeting import Meeting, ProcessingTask
 from app.schemas.meeting import (
     MeetingCreate,
@@ -15,6 +16,7 @@ from app.schemas.meeting import (
     MeetingListItem,
     MeetingStatusResponse,
 )
+from app.services import embedding_service
 from app.services.storage_service import StorageService
 from app.tasks.meeting_tasks import process_meeting_task
 
@@ -82,6 +84,38 @@ def get_task_status(meeting_id: str, db: Session = Depends(get_db)) -> MeetingSt
         progress_percentage=meeting.progress,
         error_message=latest_task.error_message if latest_task else None,
     )
+
+
+# ── Delete meeting (SQL row + graph nodes + embeddings + files) ────────
+@router.delete("/meeting/{meeting_id}", status_code=204)
+def delete_meeting(meeting_id: str, db: Session = Depends(get_db)) -> Response:
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if meeting is None:
+        raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+
+    # Neo4j/Chroma may legitimately be down in local dev (same tolerance as
+    # main.py's startup constraint setup and askcoco_service's graph
+    # fallback) — log and keep going rather than blocking the SQL delete,
+    # since leaving the meeting stuck forever because a side-store is
+    # offline is worse than a stale node/embedding the next successful
+    # delete-retry (or manual cleanup) can still catch.
+    try:
+        graph_builder.delete_meeting(meeting_id)
+    except Exception as exc:
+        logger.warning(f"Meeting {meeting_id}: graph cleanup failed: {exc}")
+
+    try:
+        embedding_service.delete_meeting(meeting_id)
+    except Exception as exc:
+        logger.warning(f"Meeting {meeting_id}: embedding cleanup failed: {exc}")
+
+    storage.delete_meeting_files(meeting_id)
+
+    db.delete(meeting)
+    db.commit()
+
+    logger.info(f"Meeting {meeting_id} deleted (graph, embeddings, files, DB row)")
+    return Response(status_code=204)
 
 
 # ── Task 5.1 — Meeting list ────────────────────────────────────────────

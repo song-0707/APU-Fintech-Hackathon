@@ -97,6 +97,18 @@ From the transcript, extract a concise summary, decisions, action items,
 risks, and factual knowledge triples. Decision confidence must be one of
 "firm_commitment" | "soft_agreement" | "unresolved".
 
+For each knowledge triple's subject and object, classify it with a
+subject_type/object_type from this FIXED list — do not invent any other
+category:
+  "Person"        — a named individual
+  "Project"       — a project or workstream
+  "Organization"  — a company, vendor, department, or team
+  "System"        — software, a platform, or a tool
+  "Policy"        — a rule, guideline, or compliance requirement
+  "Document"      — a contract, report, or file
+  "Concept"       — anything else: an idea, risk, topic, or activity
+If you are unsure which category fits, use "Concept" rather than guessing.
+
 **Meeting Transcript:**
 {transcript_text}
 
@@ -125,7 +137,8 @@ risks, and factual knowledge triples. Decision confidence must be one of
   ],
   "risks": ["A concrete risk raised in the meeting"],
   "knowledge_triples": [
-    {{"subject": "Project Alpha", "predicate": "USES_VENDOR", "object": "Provider X"}}
+    {{"subject": "Project Alpha", "subject_type": "Project", "predicate": "USES_VENDOR",
+      "object": "Provider X", "object_type": "Organization"}}
   ]
 }}
 """
@@ -269,7 +282,15 @@ def demo_meeting_intelligence(meeting_id: str) -> MeetingIntelligence:
             "The transition may increase Project Alpha's budget by 15%.",
         ],
         knowledge_triples=[
-            {"subject": "Project Alpha", "predicate": "USES_VENDOR", "object": "Provider X"},
-            {"subject": "Tom Wright", "predicate": "OWNS", "object": "Provider X security audit"},
+            {
+                "subject": "Project Alpha", "subject_type": "Project",
+                "predicate": "USES_VENDOR",
+                "object": "Provider X", "object_type": "Organization",
+            },
+            {
+                "subject": "Tom Wright", "subject_type": "Person",
+                "predicate": "OWNS",
+                "object": "Provider X security audit", "object_type": "Concept",
+            },
         ],
     )

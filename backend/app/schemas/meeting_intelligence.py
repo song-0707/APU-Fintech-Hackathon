@@ -73,10 +73,32 @@ class Flag(BaseModel):
     judge: str = "llm"
 
 
+class EntityType(str, Enum):
+    """Closed taxonomy for knowledge_triples subjects/objects — used as the
+    literal Neo4j node label (graph_builder interpolates .value directly
+    into MERGE), so this must stay a short, fixed list rather than
+    open-ended LLM output. person/project reuse the exact same label +
+    MERGE key as intelligence.participants/project, so e.g. a triple
+    subject typed "Person" with name "Tom Wright" lands on the same node
+    as Tom Wright the participant, not a separate one. concept is the
+    fallback for anything that doesn't fit the other six — see its use as
+    the field default below."""
+
+    person = "Person"
+    project = "Project"
+    organization = "Organization"
+    system = "System"
+    policy = "Policy"
+    document = "Document"
+    concept = "Concept"
+
+
 class KnowledgeTriple(BaseModel):
     subject: str
+    subject_type: EntityType = EntityType.concept
     predicate: str
     object: str
+    object_type: EntityType = EntityType.concept
 
 
 class MeetingAnalysis(BaseModel):

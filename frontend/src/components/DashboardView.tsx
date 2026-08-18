@@ -1,28 +1,47 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { 
-  Sparkles, 
-  Clock, 
-  CheckCircle2, 
-  Search, 
-  Filter, 
-  Calendar, 
-  FileAudio, 
+import * as api from '../services/api';
+import {
+  Sparkles,
+  Clock,
+  CheckCircle2,
+  Search,
+  Filter,
+  Calendar,
+  FileAudio,
   ArrowRight,
-  UserCheck
+  UserCheck,
+  X,
+  AlertTriangle
 } from 'lucide-react';
 
 export const DashboardView: React.FC = () => {
-  const { 
-    meetings, 
-    currentUser, 
+  const {
+    meetings,
+    currentUser,
     personalDashboard,
     setActiveTab,
+    setSelectedMeetingId,
     processAudioForMeeting
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [projectFilter, setProjectFilter] = useState('ALL');
+
+  const [showFlagsModal, setShowFlagsModal] = useState(false);
+  const [flagsDetail, setFlagsDetail] = useState<api.BackendContradictionDetail[] | null>(null);
+  const [flagsLoading, setFlagsLoading] = useState(false);
+  const [flagsError, setFlagsError] = useState<string | null>(null);
+
+  const handleOpenFlags = () => {
+    setShowFlagsModal(true);
+    setFlagsLoading(true);
+    setFlagsError(null);
+    api.getContradictions(currentUser.name)
+      .then(setFlagsDetail)
+      .catch((err) => setFlagsError(err instanceof Error ? err.message : 'Failed to load flags.'))
+      .finally(() => setFlagsLoading(false));
+  };
 
   // Strict user-based filtering: ONLY show meetings where currentUser is in participants!
   const currentUserMeetings = useMemo(() => {
@@ -130,12 +149,16 @@ export const DashboardView: React.FC = () => {
             <div className="text-xs font-semibold text-slate-400 mt-0.5">Completed</div>
           </div>
 
-          <div className="text-center">
+          <button
+            onClick={handleOpenFlags}
+            className="text-center cursor-pointer rounded-xl px-2 py-1 -mx-2 -my-1 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors"
+            title="View contradiction details"
+          >
             <div className="text-3xl font-extrabold text-rose-500 font-mono">
               {personalDashboard?.flags.length ?? 0}
             </div>
             <div className="text-xs font-semibold text-slate-400 mt-0.5">Your Flags</div>
-          </div>
+          </button>
 
           <div className="text-center">
             <div className="text-3xl font-extrabold text-violet-500 font-mono">
@@ -385,7 +408,10 @@ export const DashboardView: React.FC = () => {
             {filteredCompleted.map((mtg) => (
               <div
                 key={mtg.id}
-                onClick={() => setActiveTab('meetings')}
+                onClick={() => {
+                  setSelectedMeetingId(mtg.id);
+                  setActiveTab('meetings');
+                }}
                 className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-5 shadow-xs hover:shadow-md hover:border-indigo-500 transition-all cursor-pointer space-y-3.5 flex flex-col justify-between group"
               >
                 <div className="space-y-3">
@@ -417,6 +443,60 @@ export const DashboardView: React.FC = () => {
         )}
       </div>
 
+      {showFlagsModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 max-w-lg w-full max-h-[80vh] shadow-2xl space-y-4 flex flex-col">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-full bg-rose-100 dark:bg-rose-950 flex items-center justify-center text-rose-600 dark:text-rose-400 shrink-0">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white">Your Flagged Decisions</h4>
+              </div>
+              <button
+                onClick={() => setShowFlagsModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto space-y-3">
+              {flagsLoading && (
+                <p className="text-xs text-slate-400 text-center py-6">Loading…</p>
+              )}
+              {!flagsLoading && flagsError && (
+                <p className="text-xs text-red-500 text-center py-6">{flagsError}</p>
+              )}
+              {!flagsLoading && !flagsError && flagsDetail && flagsDetail.length === 0 && (
+                <p className="text-xs text-slate-400 text-center py-6">No contradictions found in your decisions.</p>
+              )}
+              {!flagsLoading && !flagsError && flagsDetail && flagsDetail.map((flag) => (
+                <div
+                  key={`${flag.decision_id}-${flag.contradicts_decision_id}`}
+                  className="rounded-xl border border-rose-100 dark:border-rose-950 bg-rose-50/60 dark:bg-rose-950/20 p-3.5 space-y-2"
+                >
+                  <div>
+                    <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">{flag.decision_text}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">in {flag.meeting_title || 'an unknown meeting'}</p>
+                  </div>
+                  <div className="pl-3 border-l-2 border-rose-300 dark:border-rose-800">
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      contradicts: {flag.contradicts_decision_text}
+                    </p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      in {flag.contradicts_meeting_title || 'an unknown meeting'}
+                    </p>
+                  </div>
+                  {flag.message && (
+                    <p className="text-[11px] text-rose-700 dark:text-rose-400 italic">{flag.message}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

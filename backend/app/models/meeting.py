@@ -29,7 +29,7 @@ class Meeting(Base):
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
-    tasks = relationship("ProcessingTask", back_populates="meeting")
+    tasks = relationship("ProcessingTask", back_populates="meeting", cascade="all, delete-orphan")
 
 
 class ProcessingTask(Base):

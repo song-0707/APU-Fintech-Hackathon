@@ -120,6 +120,22 @@ export interface BackendDashboard {
   upcoming_meetings: Array<{ id: string; title: string }>;
 }
 
+/** GET /graph/contradictions row shape — richer than BackendDashboard's
+ * `flags` (which only has message + meeting_id): this carries both
+ * decisions' full text and both meetings' titles, for a drill-down view. */
+export interface BackendContradictionDetail {
+  decision_id: string;
+  decision_text: string;
+  speaker: string | null;
+  meeting_id: string | null;
+  meeting_title: string | null;
+  contradicts_decision_id: string | null;
+  contradicts_decision_text: string | null;
+  contradicts_meeting_id: string | null;
+  contradicts_meeting_title: string | null;
+  message: string | null;
+}
+
 // ── Raw fetch calls ─────────────────────────────────────────────────────
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -185,6 +201,28 @@ export async function uploadMeeting(
   return res.json();
 }
 
+export async function deleteMeeting(meetingId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/meeting/${meetingId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+}
+
+/** Sets (or, with displayName=null, clears) a graph node's display-only
+ * label override. `identifier` is the node's real id/name — for Person and
+ * Project nodes that's the part after the "type:" prefix in a GraphNode's
+ * `id` (their real name never changes, only what's rendered does). */
+export async function setNodeDisplayName(
+  nodeType: string,
+  identifier: string,
+  displayName: string | null
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/graph/node-label`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ node_type: nodeType, identifier, display_name: displayName }),
+  });
+  if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
+}
+
 export async function askCoco(query: string): Promise<BackendQueryResponse> {
   const res = await fetch(`${API_BASE}/query`, {
     method: 'POST',
@@ -197,6 +235,13 @@ export async function askCoco(query: string): Promise<BackendQueryResponse> {
 
 export async function getUserDashboard(userId: string): Promise<BackendDashboard> {
   return apiGet(`/users/${encodeURIComponent(userId)}/dashboard`);
+}
+
+/** Full detail behind BackendDashboard's flags count — every contradiction
+ * for `person`'s decisions (or every contradiction org-wide if omitted). */
+export async function getContradictions(person?: string): Promise<BackendContradictionDetail[]> {
+  const query = person ? `?person=${encodeURIComponent(person)}` : '';
+  return apiGet(`/graph/contradictions${query}`);
 }
 
 // ── Task 7.2 — Export Report ─────────────────────────────────────────────

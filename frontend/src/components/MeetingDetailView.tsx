@@ -1,22 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Sparkles, 
-  FileText, 
-  Calendar, 
-  Clock, 
-  Users, 
-  CheckCircle2, 
-  Download, 
+import {
+  Sparkles,
+  FileText,
+  Calendar,
+  Clock,
+  Users,
+  CheckCircle2,
+  Download,
   Search,
   CheckSquare,
   BrainCircuit,
   User,
   ShieldCheck,
-  ArrowLeft
+  ArrowLeft,
+  Trash2
 } from 'lucide-react';
 import { Meeting, ActionItem, UserProfile, GraphData } from '../types';
 import { INITIAL_USER_PROFILE } from '../mock/mockData';
 import { buildLocalMeetingGraph, downloadMeetingReport, getGraphData, toGraphData } from '../services/api';
+import { useApp } from '../context/AppContext';
 import { DecisionGraph } from './DecisionGraph';
 import { StatusBadge } from './StatusBadge';
 import { ActionItemsTable } from './ActionItemsTable';
@@ -39,15 +41,19 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
   onBackToDashboard,
   onSendDirectMessage
 }) => {
+  const { deleteMeeting } = useApp();
+
   // Resolve current active meeting from props
-  const currentMeeting = (meetings && selectedMeetingId 
-    ? meetings.find(m => m.id === selectedMeetingId) 
+  const currentMeeting = (meetings && selectedMeetingId
+    ? meetings.find(m => m.id === selectedMeetingId)
     : null) || meeting || (meetings && meetings.length > 0 ? meetings[0] : null);
 
   const [activeTab, setActiveTab] = useState<'decisions' | 'actionItems' | 'transcript' | 'graph'>('decisions');
   const [transcriptSearch, setTranscriptSearch] = useState('');
   const [meetingGraphData, setMeetingGraphData] = useState<GraphData | undefined>(currentMeeting?.graphData);
   const [isExporting, setIsExporting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const handleExportReport = async () => {
     if (!currentMeeting) return;
@@ -59,6 +65,20 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
       alert(err instanceof Error ? err.message : 'Export failed. Please try again.');
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleDeleteMeeting = async () => {
+    if (!currentMeeting) return;
+    setIsDeleting(true);
+    try {
+      await deleteMeeting(currentMeeting.id);
+      onBackToDashboard?.();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Delete failed. Please try again.');
+    } finally {
+      setIsDeleting(false);
+      setConfirmingDelete(false);
     }
   };
 
@@ -142,13 +162,42 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
             <StatusBadge status={currentMeeting.status} />
           </div>
 
-          <button
-            onClick={handleExportReport}
-            disabled={isExporting}
-            className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold border border-slate-200 dark:border-slate-700 flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            <Download className="w-4 h-4" /> {isExporting ? 'Exporting…' : 'Export Report'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleExportReport}
+              disabled={isExporting}
+              className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold border border-slate-200 dark:border-slate-700 flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <Download className="w-4 h-4" /> {isExporting ? 'Exporting…' : 'Export Report'}
+            </button>
+
+            {confirmingDelete ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-rose-600">Delete permanently?</span>
+                <button
+                  onClick={handleDeleteMeeting}
+                  disabled={isDeleting}
+                  className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isDeleting ? 'Deleting…' : 'Yes, delete'}
+                </button>
+                <button
+                  onClick={() => setConfirmingDelete(false)}
+                  disabled={isDeleting}
+                  className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmingDelete(true)}
+                className="px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-950 text-rose-700 dark:text-rose-300 text-xs font-semibold border border-rose-200 dark:border-rose-900 flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" /> Delete Meeting
+              </button>
+            )}
+          </div>
         </div>
 
         <div>

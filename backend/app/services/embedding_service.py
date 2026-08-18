@@ -135,6 +135,14 @@ def query_snippets(question: str, n_results: int = 5) -> dict:
     return collection.query(query_texts=[question], n_results=min(n_results, collection.count()))
 
 
+def delete_meeting(meeting_id: str) -> None:
+    """Remove this meeting's entries from both collections (transcript/summary
+    snippets and decision embeddings), keyed on the meeting_id every entry is
+    upserted with in index_meeting() above."""
+    get_snippets_collection().delete(where={"meeting_id": meeting_id})
+    get_decisions_collection().delete(where={"meeting_id": meeting_id})
+
+
 def query_similar_decisions(decision_text: str, exclude_meeting_id: str, n_results: int = 3) -> list[dict]:
     """(Task 4.4) Nearest-neighbor past decisions from OTHER meetings."""
     collection = get_decisions_collection()

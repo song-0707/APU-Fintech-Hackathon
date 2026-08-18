@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     demo_mode: bool = True
     chroma_path: str = "storage/chroma"
 
+    # Set in production to the deployed frontend's exact origin (e.g.
+    # https://corporate-brain.onrender.com) — added to the CORS allowlist
+    # in main.py alongside the existing localhost/LAN dev origins.
+    frontend_origin: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

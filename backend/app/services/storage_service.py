@@ -53,3 +53,12 @@ class StorageService:
 
     def get_file(self, relative_path: str) -> bytes:
         return (self.base_path / relative_path).read_bytes()
+
+    def delete_meeting_files(self, meeting_id: str) -> None:
+        """Best-effort removal of every file this meeting wrote. Globs by
+        `{meeting_id}*` per subdir rather than one exact filename, since the
+        extension/suffix varies (raw upload keeps its original ext, a live
+        call's raw segments are `{meeting_id}_live.json`)."""
+        for sub in _SUBDIRS:
+            for path in (self.base_path / sub).glob(f"{meeting_id}*"):
+                path.unlink(missing_ok=True)

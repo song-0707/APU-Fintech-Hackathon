@@ -22,14 +22,18 @@ except Exception as e:
 
 app = FastAPI(title="Corporate Brain API")
 
+_allowed_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    # Vite may bind to IPv6 loopback and browsers then use this origin.
+    "http://[::1]:5173",
+]
+if settings.frontend_origin:
+    _allowed_origins.append(settings.frontend_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        # Vite may bind to IPv6 loopback and browsers then use this origin.
-        "http://[::1]:5173",
-    ],
+    allow_origins=_allowed_origins,
     # Development clients may open Vite through the host computer's private
     # LAN address. Public deployments should use explicit HTTPS origins.
     allow_origin_regex=(

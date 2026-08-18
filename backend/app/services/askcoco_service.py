@@ -6,7 +6,15 @@ to the *results* of that query: they're summarized into a natural answer
 (via Gemini, same client already used for meeting analysis) instead of
 being joined into a raw "field - field - field" string, and template
 selection now tolerates far more phrasings than a handful of exact
-keywords."""
+keywords.
+
+Hybrid retrieval (_semantic_expand): for questions none of the four fixed
+intent templates recognize, vector search over decisions/snippets picks
+which meetings are relevant, then a single fixed Cypher query expands each
+one to its decisions/speakers/contradictions/project — same "Cypher is
+never LLM-generated" property as every other template, just with
+embeddings choosing the $meeting_ids instead of a hardcoded MATCH. This
+only runs as a fallback below the four templates, never in place of them."""
 import json
 import re
 from collections.abc import Callable
@@ -14,11 +22,23 @@ from collections.abc import Callable
 from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.graph.neo4j_service import run_query
+from app.services import embedding_service
 from app.services.storage_service import StorageService
 
 logger = get_logger(__name__)
 settings = get_settings()
 storage = StorageService()
+
+# Chroma L2 distance over normalized MiniLM embeddings. Empirically
+# calibrated against this demo corpus (small and topically clustered around
+# a handful of meetings, so distances compress into a narrow band): a
+# genuinely off-topic query's best hits landed at 0.89-0.93, an on-topic
+# query's at 0.72-0.87, a directly-relevant one's at 0.57-0.70. 0.8 sits
+# between the off-topic cluster and both relevant ones. A larger, more
+# topically diverse corpus would likely separate more cleanly and could
+# use a tighter threshold — this number is tuned to what exists today, not
+# a universal constant.
+_SEMANTIC_DISTANCE_THRESHOLD = 0.8
 
 # Meeting summaries only ever get written to storage/summaries/{id}.json
 # (graph_builder only puts id/title on the Meeting node, never the summary
@@ -61,6 +81,7 @@ def _decisions(_: str) -> tuple[str, dict]:
         "MATCH (d:Decision)-[:MADE_IN]->(m:Meeting) "
         "OPTIONAL MATCH (d)-[:MADE_BY]->(p:Person) "
         "RETURN d.text AS decision, d.confidence AS confidence, p.name AS speaker, "
+        "d.reason AS reason, d.evidence AS evidence, "
         "m.title AS meeting ORDER BY d.timestamp",
         {},
     )
@@ -92,6 +113,48 @@ def _meetings(_: str) -> tuple[str, dict]:
         "ORDER BY meeting",
         {},
     )
+
+
+def _semantic_expand(query: str, n_results: int = 5) -> tuple[list[dict], list[dict]]:
+    """Hybrid GraphRAG fallback for questions that don't match any keyword
+    template above. Vector search over both Chroma collections — decisions,
+    and meeting_snippets via query_snippets (written for Ask Coco's RAG
+    context in Task 5.5, but never actually called before this: Ask Coco was
+    rebuilt to Cypher-templates before it got wired up) — finds which
+    meetings are close enough to be relevant, then one fixed, parameterized
+    Cypher query expands each into its decisions (with speaker/reason/
+    evidence), contradictions, and project. Returns ([], []) if nothing
+    clears the distance threshold, so the caller can fall back further."""
+    meeting_ids: set[str] = set()
+
+    for hit in embedding_service.query_similar_decisions(query, exclude_meeting_id="", n_results=n_results):
+        if hit["distance"] <= _SEMANTIC_DISTANCE_THRESHOLD and hit.get("meeting_id"):
+            meeting_ids.add(hit["meeting_id"])
+
+    snippet_hits = embedding_service.query_snippets(query, n_results=n_results)
+    metadatas = (snippet_hits.get("metadatas") or [[]])[0]
+    distances = (snippet_hits.get("distances") or [[]])[0]
+    for meta, dist in zip(metadatas, distances):
+        if dist <= _SEMANTIC_DISTANCE_THRESHOLD and meta.get("meeting_id"):
+            meeting_ids.add(meta["meeting_id"])
+
+    if not meeting_ids:
+        return [], []
+
+    results = run_query(
+        "MATCH (m:Meeting) WHERE m.id IN $meeting_ids "
+        "OPTIONAL MATCH (d:Decision)-[:MADE_IN]->(m) "
+        "OPTIONAL MATCH (d)-[:MADE_BY]->(p:Person) "
+        "OPTIONAL MATCH (d)-[c:CONTRADICTS]->(other:Decision) "
+        "OPTIONAL MATCH (m)-[:RELATES_TO]->(pr:Project) "
+        "RETURN m.title AS meeting, pr.name AS project, "
+        "d.text AS decision, d.reason AS reason, d.evidence AS evidence, "
+        "d.confidence AS confidence, p.name AS speaker, "
+        "other.text AS contradicts, c.message AS contradiction_message "
+        "ORDER BY m.date DESC",
+        meeting_ids=list(meeting_ids),
+    )
+    return results, _citations_for("semantic", results)
 
 
 # Each entry: (keywords, builder, kind). "kind" drives both the no-LLM
@@ -173,6 +236,7 @@ def _format_answer_fallback(kind: str, results: list[dict]) -> str:
             "contradictions": "No contradictions found in the graph.",
             "participants": "No matching participants were found.",
             "meetings": "No meetings were found.",
+            "semantic": "Nothing in the knowledge graph looked relevant to that question.",
         }.get(kind, "No matching meeting records were found.")
 
     lines: list[str] = []
@@ -184,13 +248,21 @@ def _format_answer_fallback(kind: str, results: list[dict]) -> str:
         elif kind == "decisions":
             speaker = f" ({row['speaker']})" if row.get("speaker") else ""
             meeting = f" in {row['meeting']}" if row.get("meeting") else ""
-            lines.append(f"{row.get('decision')}{speaker} — {row.get('confidence', 'unknown confidence')}{meeting}")
+            reason = f" — {row['reason']}" if row.get("reason") else ""
+            lines.append(f"{row.get('decision')}{speaker} — {row.get('confidence', 'unknown confidence')}{meeting}{reason}")
         elif kind == "contradictions":
             meeting = f" ({row['meeting']})" if row.get("meeting") else ""
             lines.append(f"\"{row.get('decision')}\" conflicts with \"{row.get('conflicts_with')}\"{meeting}: {row.get('message', '')}")
         elif kind == "participants":
             meetings = ", ".join(row.get("meetings") or [])
             lines.append(f"{row.get('participant')} — {meetings}")
+        elif kind == "semantic":
+            if row.get("decision"):
+                speaker = f" ({row['speaker']})" if row.get("speaker") else ""
+                reason = f" — {row['reason']}" if row.get("reason") else ""
+                lines.append(f"{row['decision']}{speaker} in {row.get('meeting')}{reason}")
+            else:
+                lines.append(f"Relevant meeting: {row.get('meeting')}")
         else:
             meeting = row.get("meeting")
             participants = ", ".join(row.get("participants") or [])
@@ -231,6 +303,13 @@ def _citations_for(kind: str, results: list[dict]) -> list[dict]:
                 "timestamp": "",
                 "speaker": "",
                 "excerpt": f'"{row.get("decision")}" vs. "{row.get("conflicts_with")}" — {row.get("message") or ""}',
+            })
+        elif kind == "semantic" and row.get("decision"):
+            citations.append({
+                "filename": row.get("meeting") or "",
+                "timestamp": "",
+                "speaker": row.get("speaker") or "",
+                "excerpt": row.get("decision") or "",
             })
         # participants/meetings are directory listings, not a claim that
         # needs a specific source quoted back — no citations for those.
@@ -294,6 +373,25 @@ def ask(query: str) -> dict:
         return {"answer": answer, "results": [row], "cypher": note, "citations": _citations_for("summary", [row])}
 
     builder, kind = _select_template(query)
+
+    if kind == "meetings":
+        # No fixed-intent keyword matched — before falling back to the
+        # generic "list every meeting" template, try hybrid retrieval. The
+        # four templates above are untouched by this and are still tried
+        # first on every call via _select_template; this only fires for the
+        # residual case that used to just weakly list meetings.
+        semantic_results, semantic_citations = _semantic_expand(query)
+        if semantic_results:
+            answer = _synthesize_with_gemini(query, "semantic", semantic_results) or _format_answer_fallback(
+                "semantic", semantic_results
+            )
+            return {
+                "answer": answer,
+                "results": semantic_results,
+                "cypher": "<vector search over decisions/snippets, then Cypher expansion by matched meeting_id>",
+                "citations": semantic_citations,
+            }
+
     cypher, params = builder(query)
     try:
         results = run_query(cypher, **params)

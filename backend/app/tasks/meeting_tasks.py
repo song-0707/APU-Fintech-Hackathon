@@ -143,7 +143,7 @@ def _save_and_graph(meeting: Meeting, intelligence: MeetingIntelligence) -> None
         "knowledge_triples": [triple.model_dump() for triple in intelligence.knowledge_triples],
     })
 
-    graph_builder.build_from_meeting(meeting.id, meeting.title, meeting.project, intelligence)
+    graph_builder.build_from_meeting(meeting.id, meeting.title, meeting.project, intelligence, meeting.date)
 
     for flag in intelligence.flags:
         if flag.source_decision_text and flag.contradicts_meeting_id and flag.contradicts_decision_text:
@@ -167,6 +167,12 @@ def _process_meeting(task, meeting_id: str, run_pipeline) -> None:
         task_record = _get_or_create_task_record(db, meeting_id)
         task_record.status = "processing"
         task_record.retry_count = task.request.retries
+        # Same reasoning as useLiveMeetingSession.ts's connection-error reset:
+        # a prior attempt's error must not linger in front of this one,
+        # successful or not — otherwise a fresh retry can sit at "processing"
+        # (or even reach "completed") while the API still reports the old
+        # failure.
+        task_record.error_message = None
         meeting.status = "processing"
         meeting.progress = 5
         db.commit()

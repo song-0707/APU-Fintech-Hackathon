@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { GraphData, GraphNode, Meeting } from '../types';
 import { useApp } from '../context/AppContext';
+import * as api from '../services/api';
 import {
   Filter,
   X,
@@ -18,7 +19,8 @@ import {
   Plus,
   Minus,
   Maximize2,
-  Info
+  Info,
+  Pencil
 } from 'lucide-react';
 
 interface KnowledgeGraphViewProps {
@@ -29,10 +31,14 @@ interface KnowledgeGraphViewProps {
   onSendDirectMessage?: (recipientName: string, text: string) => void;
 }
 
-// Node type styling — backend node types are capitalized (Meeting, Person,
-// Decision, ActionItem, Project); this is the single source of truth for
-// color/label/short-tag per type so the legend, node canvas rendering, and
-// detail panel all agree.
+// Node type styling — kept to the original five (Meeting, Person, Decision,
+// ActionItem, Project) plus Contradicts, by request. The backend can still
+// emit the knowledge_triples taxonomy (Organization/System/Policy/Document/
+// Concept — see backend/app/schemas/meeting_intelligence.EntityType); those
+// just aren't given a dedicated color/legend entry here, so they render via
+// DEFAULT_STYLE below instead of their own row. This is the single source
+// of truth for color/label/short-tag per type so the legend, node canvas
+// rendering, and detail panel all agree.
 const TYPE_STYLE: Record<string, { color: string; tag: string; label: string }> = {
   Meeting: { color: '#3b82f6', tag: 'M', label: 'Meeting' },
   Decision: { color: '#16a34a', tag: 'D', label: 'Decision' },
@@ -62,6 +68,17 @@ function relationPhrase(linkType: string | undefined, incoming: boolean): string
   const pair = RELATION_PHRASING[linkType || ''];
   if (pair) return incoming ? pair[1] : pair[0];
   return (linkType || 'related').toLowerCase().replace(/_/g, ' ');
+}
+
+// A GraphNode's id is always "type:realIdentity" (see api.ts's toGraphData /
+// backend api/graph.py) — realIdentity is the Person/Project's real name or
+// the Meeting/Decision/ActionItem's real id, and stays stable even when a
+// display-label override changes what's shown. Anything that needs to look
+// this node up elsewhere (renaming it, messaging a Person) should use this,
+// not the possibly-overridden display name.
+function realIdentifierFor(node: GraphNode): string {
+  const idx = node.id.indexOf(':');
+  return idx === -1 ? node.id : node.id.slice(idx + 1);
 }
 
 export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
@@ -108,6 +125,33 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   const [messageText, setMessageText] = useState('');
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+
+  // Session-local cache of display-label overrides (nodeId -> label), so a
+  // successful rename shows up immediately without waiting on a full graph
+  // refetch. The backend persists the real override; this just mirrors it
+  // for the currently-rendered graph.
+  const [labelOverrides, setLabelOverrides] = useState<Record<string, string>>({});
+  const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [editingLabelValue, setEditingLabelValue] = useState('');
+  const [isSavingLabel, setIsSavingLabel] = useState(false);
+
+  const effectiveName = (node: GraphNode): string => labelOverrides[node.id] ?? node.name;
+
+  const handleSaveLabel = async () => {
+    if (!selectedNode) return;
+    const trimmed = editingLabelValue.trim();
+    if (!trimmed) return;
+    setIsSavingLabel(true);
+    try {
+      await api.setNodeDisplayName(selectedNode.type, realIdentifierFor(selectedNode), trimmed);
+      setLabelOverrides(prev => ({ ...prev, [selectedNode.id]: trimmed }));
+      setIsEditingLabel(false);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Rename failed. Please try again.');
+    } finally {
+      setIsSavingLabel(false);
+    }
+  };
 
   useEffect(() => {
     if (currentMeetingId) {
@@ -184,6 +228,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
     setSelectedNode(node as GraphNode);
     setIsCopied(false);
     setShowMessageModal(false);
+    setIsEditingLabel(false);
   };
 
   // Every node/link this one touches, with a human-readable relationship —
@@ -217,7 +262,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
 
   const handleCopyContact = () => {
     if (!selectedNode) return;
-    const text = `Name: ${selectedNode.name}\nRole: ${selectedNode.role || 'Team Member'}\nEmail: ${selectedNode.email || 'N/A'}\nPhone: ${selectedNode.phone || 'N/A'}`;
+    const text = `Name: ${effectiveName(selectedNode)}\nRole: ${selectedNode.role || 'Team Member'}\nEmail: ${selectedNode.email || 'N/A'}\nPhone: ${selectedNode.phone || 'N/A'}`;
     navigator.clipboard.writeText(text);
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
@@ -226,13 +271,16 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   const handleSendMessage = () => {
     if (!selectedNode || !messageText.trim()) return;
 
-    sendDirectMessage(selectedNode.name, messageText.trim());
+    // Directory/DM lookups match on the person's real name, not a display
+    // label they may have renamed this node to in the graph.
+    const realName = realIdentifierFor(selectedNode);
+    sendDirectMessage(realName, messageText.trim());
 
     if (onSendDirectMessage) {
-      onSendDirectMessage(selectedNode.name, messageText.trim());
+      onSendDirectMessage(realName, messageText.trim());
     }
 
-    setToastMessage(`Message sent to ${selectedNode.name}!`);
+    setToastMessage(`Message sent to ${effectiveName(selectedNode)}!`);
     setShowToast(true);
     setShowMessageModal(false);
     setMessageText('');
@@ -331,12 +379,9 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
           graphData={activeGraphData}
           cooldownTicks={100}
           d3VelocityDecay={0.3}
-          linkDirectionalParticles={2}
-          linkDirectionalParticleSpeed={0.005}
-          linkDirectionalParticleWidth={2}
           nodeRelSize={6}
           onNodeClick={handleNodeClick}
-          nodeLabel={(node: any) => `${node.name} (${styleFor(node.type).label})`}
+          nodeLabel={(node: any) => `${labelOverrides[node.id] ?? node.name} (${styleFor(node.type).label})`}
           nodeColor={(node: any) => node.color || styleFor(node.type).color}
           linkLabel={(link: any) => link.isContradiction ? `⚠ CONTRADICTS — ${link.message || link.label || ''}` : (link.label || '')}
           linkColor={(link: any) => link.isContradiction ? '#ef4444' : '#94a3b8'}
@@ -351,7 +396,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
             // past a zoom threshold (or for the selected node) so a graph
             // with many long decision/action sentences doesn't turn into
             // unreadable overlapping text at the default fit-to-view zoom.
-            const rawLabel: string = node.name || '';
+            const rawLabel: string = labelOverrides[node.id] ?? node.name ?? '';
             const label = rawLabel.length > 22 ? `${rawLabel.slice(0, 21)}…` : rawLabel;
             const showLabel = isSelected || globalScale > 1.1;
             const fontSize = 12 / globalScale;
@@ -412,7 +457,52 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
                 {styleFor(selectedNode.type).tag}
               </div>
               <div>
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white">{selectedNode.name}</h4>
+                {isEditingLabel ? (
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="text"
+                      value={editingLabelValue}
+                      onChange={(e) => setEditingLabelValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveLabel();
+                        if (e.key === 'Escape') setIsEditingLabel(false);
+                      }}
+                      autoFocus
+                      disabled={isSavingLabel}
+                      className="text-sm font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-800 border border-indigo-400 dark:border-indigo-600 rounded-lg px-2 py-0.5 w-36 focus:outline-hidden disabled:opacity-60"
+                    />
+                    <button
+                      onClick={handleSaveLabel}
+                      disabled={isSavingLabel || !editingLabelValue.trim()}
+                      title="Save"
+                      className="p-1 rounded-md bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-200 dark:hover:bg-emerald-900 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setIsEditingLabel(false)}
+                      disabled={isSavingLabel}
+                      title="Cancel"
+                      className="p-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer disabled:opacity-50"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 group/label">
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white">{effectiveName(selectedNode)}</h4>
+                    <button
+                      onClick={() => {
+                        setEditingLabelValue(effectiveName(selectedNode));
+                        setIsEditingLabel(true);
+                      }}
+                      title="Rename"
+                      className="p-0.5 rounded text-slate-300 hover:text-indigo-600 dark:text-slate-600 dark:hover:text-indigo-400 opacity-0 group-hover/label:opacity-100 focus:opacity-100 transition-opacity cursor-pointer"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
                 <span
                   className="inline-block px-2 py-0.2 rounded-md text-[10px] font-bold text-white"
                   style={{ backgroundColor: styleFor(selectedNode.type).color }}
@@ -451,7 +541,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
                         className="w-2 h-2 rounded-full inline-block shrink-0"
                         style={{ backgroundColor: styleFor(c.node.type).color }}
                       />
-                      <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{c.node.name}</span>
+                      <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{effectiveName(c.node)}</span>
                     </div>
                     <div className="text-[11px] text-slate-500 dark:text-slate-400 pl-3.5">
                       {c.relation} · {styleFor(c.node.type).label.toLowerCase()}
@@ -501,7 +591,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
                   onClick={() => {
                     setShowMessageModal(true);
                     if (!messageText) {
-                      setMessageText(`Hi ${selectedNode.name.split(' ')[0]}, regarding our recent meeting decision: `);
+                      setMessageText(`Hi ${effectiveName(selectedNode).split(' ')[0]}, regarding our recent meeting decision: `);
                     }
                   }}
                   className="py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer text-center"
@@ -535,7 +625,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
                 </div>
                 <div>
                   <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                    Send Message to {selectedNode.name}
+                    Send Message to {effectiveName(selectedNode)}
                   </h4>
                 </div>
               </div>

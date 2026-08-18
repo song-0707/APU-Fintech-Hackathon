@@ -22,7 +22,7 @@ interface NavItem {
 }
 
 export const Sidebar: React.FC = () => {
-  const { activeTab, setActiveTab } = useApp();
+  const { activeTab, setActiveTab, setSelectedMeetingId } = useApp();
 
   const navItems: NavItem[] = [
     {
@@ -88,7 +88,13 @@ export const Sidebar: React.FC = () => {
               return (
                 <button
                   key={item.id}
-                  onClick={() => setActiveTab(item.id)}
+                  onClick={() => {
+                    // Sidebar navigation always lands on that tab's default
+                    // view — a stale selected meeting from a previous
+                    // dashboard-click shouldn't reopen its detail view here.
+                    if (item.id === 'meetings') setSelectedMeetingId(null);
+                    setActiveTab(item.id);
+                  }}
                   className={`w-full flex items-center justify-between px-3.5 py-3 rounded-2xl text-sm font-semibold transition-all group cursor-pointer ${
                     isActive
                       ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 shadow-2xs border-l-4 border-indigo-600 font-bold'

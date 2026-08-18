@@ -44,6 +44,8 @@ def test_global_graph_data_has_no_dangling_links_under_concurrent_write():
         [],                                                            # action items
         [],                                                            # meeting-RELATES_TO-project
         [],                                                            # decision-RELATES_TO-project
+        [],                                                            # taxonomy nodes MENTIONED_IN
+        [],                                                            # taxonomy RELATES_AS
         [{"from_id": "d1", "from_text": "Decision One", "to_id": "d2",
           "to_text": "Decision Two (written concurrently)", "message": "conflict"}],  # CONTRADICTS
     ]
@@ -56,6 +58,38 @@ def test_global_graph_data_has_no_dangling_links_under_concurrent_write():
     assert {"decision:d1", "decision:d2"} <= {n["id"] for n in payload["nodes"]}
 
 
+def test_global_graph_data_surfaces_taxonomy_nodes_with_predicate_as_link_type():
+    """Organization/Project etc. nodes (from knowledge_triples) must come
+    through as their real label, not a generic "Entity" bucket, and a
+    RELATES_AS edge's displayed type is the predicate text, not the literal
+    relationship type — see the rationale comment in api/graph.py."""
+    responses = [
+        [],  # meetings
+        [],  # PARTICIPATED_IN
+        [],  # decisions
+        [],  # action items
+        [],  # meeting-RELATES_TO-project
+        [],  # decision-RELATES_TO-project
+        [{"name": "Project Alpha", "label": "Project Alpha", "node_type": "Project", "meeting_id": "m1"}],
+        [{"subject": "Project Alpha", "subject_label": "Project Alpha", "subject_type": "Project",
+          "object": "Provider X", "object_label": "Provider X", "object_type": "Organization",
+          "predicate": "USES_VENDOR"}],
+        [],  # CONTRADICTS
+    ]
+    with patch("app.graph.neo4j_service.run_query", side_effect=responses):
+        response = client.get("/graph")
+
+    assert response.status_code == 200
+    payload = response.json()
+    _assert_no_dangling_links(payload)
+    nodes_by_id = {n["id"]: n for n in payload["nodes"]}
+    assert nodes_by_id["project:Project Alpha"]["type"] == "Project"
+    assert nodes_by_id["organization:Provider X"]["type"] == "Organization"
+    triple_link = next(l for l in payload["links"] if l["source"] == "project:Project Alpha")
+    assert triple_link["target"] == "organization:Provider X"
+    assert triple_link["type"] == "USES_VENDOR"
+
+
 def test_meeting_graph_data_has_no_dangling_links_for_cross_meeting_contradiction():
     responses = [
         [{"id": "m1", "title": "Meeting One"}],                      # meeting lookup
@@ -64,6 +98,8 @@ def test_meeting_graph_data_has_no_dangling_links_for_cross_meeting_contradictio
         [],                                                            # action items
         [],                                                            # meeting-RELATES_TO-project
         [],                                                            # decision-RELATES_TO-project
+        [],                                                            # taxonomy nodes MENTIONED_IN
+        [],                                                            # taxonomy RELATES_AS
         [{"from_id": "d1", "to_id": "d2", "to_text": "External Decision", "message": "conflict"}],  # CONTRADICTS
     ]
     with patch("app.graph.neo4j_service.run_query", side_effect=responses):
