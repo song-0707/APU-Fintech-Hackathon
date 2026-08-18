@@ -17,28 +17,32 @@ logger = get_logger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
-# Demo employee directory — reuses AppContext.tsx's initialEmployees
-# names/titles since those are the ones that already appear as speakers in
-# the bundled demo meeting data. This is the backend's only source of role
-# (is_management); request identity is asserted via the X-User-Name header
-# (see app/core/auth.py) and looked up here, not trusted directly.
+# Demo employee directory — mirrors mockData.ts's INITIAL_EMPLOYEES_DATA,
+# the frontend's actual login/demo-switcher roster. This is the backend's
+# only source of role (is_management); request identity is asserted via the
+# X-User-Name header (see app/core/auth.py) and looked up here, not trusted
+# directly. Keep this in sync by hand when the frontend roster changes —
+# there's no shared source of truth between the two yet.
 _DEMO_EMPLOYEES = [
-    ("Alex Mercer", "alex.mercer@corpbrain.ai", "VP of Product", True),
-    ("Sarah Jenkins", "sarah.jenkins@corpbrain.ai", "VP of Engineering", True),
-    ("Marcus Vance", "marcus.vance@corpbrain.ai", "Head of Product", True),
-    ("Elena Rostova", "elena.rostova@corpbrain.ai", "Chief Financial Officer", True),
-    ("David Chen", "david.chen@corpbrain.ai", "Principal AI Architect", False),
-    ("Amanda Brooks", "amanda.brooks@corpbrain.ai", "General Counsel", True),
+    ("Thim Yee Song", "thim.yeesong@corpbrain.ai", "VP of Product", True),
+    ("Duncan", "duncan@corpbrain.ai", "VP of Engineering", True),
+    ("Kam Xin Le", "kam.xinle@corpbrain.ai", "Head of Product", True),
+    ("Yap En Yu", "yap.enyu@corpbrain.ai", "Chief Financial Officer", True),
 ]
 
 
 def _seed_employees() -> None:
+    """Upserts by name rather than a one-time "table is empty" check — the
+    empty-check version silently stopped applying roster changes the moment
+    the table was first seeded, which is exactly how this list went stale
+    against mockData.ts after a merge updated the frontend roster but an
+    already-seeded dev DB never re-ran this function."""
     db = SessionLocal()
     try:
-        if db.query(Employee).first() is None:
-            for name, email, title, is_management in _DEMO_EMPLOYEES:
+        for name, email, title, is_management in _DEMO_EMPLOYEES:
+            if db.query(Employee).filter(Employee.name == name).first() is None:
                 db.add(Employee(name=name, email=email, title=title, is_management=is_management))
-            db.commit()
+        db.commit()
     finally:
         db.close()
 
