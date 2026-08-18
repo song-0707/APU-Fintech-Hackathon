@@ -43,18 +43,10 @@ export const DashboardView: React.FC = () => {
       .finally(() => setFlagsLoading(false));
   };
 
-  // Strict user-based filtering: ONLY show meetings where currentUser is in participants!
-  const currentUserMeetings = useMemo(() => {
-    return meetings.filter(m => {
-      if (!m.participants) return false;
-      return m.participants.some(p => {
-        const pName = typeof p === 'string' ? p : (p as any).name || '';
-        return pName.toLowerCase().includes(currentUser.name.toLowerCase()) ||
-               currentUser.name.toLowerCase().includes(pName.toLowerCase());
-      });
-    });
-  }, [meetings, currentUser]);
-
+  // meetings is already scoped to currentUser — the backend's /meetings
+  // enforces that (see backend/app/api/meetings.py), so re-filtering it
+  // client-side would just risk silently disagreeing with the server.
+  //
   // Filtered lists for upcoming and completed
   // Real (non-demo) processing genuinely takes time and passes through
   // every one of these statuses in turn — a filter that only recognized
@@ -62,12 +54,12 @@ export const DashboardView: React.FC = () => {
   // real progress crossed into 'ASR'/'LLM'/'Graph' (or hit 'Retrying'),
   // since it no longer matched "upcoming" but wasn't 'Completed' either.
   const upcomingMeetings = useMemo(() => {
-    return currentUserMeetings.filter(m => m.status !== 'Completed');
-  }, [currentUserMeetings]);
+    return meetings.filter(m => m.status !== 'Completed');
+  }, [meetings]);
 
   const completedMeetings = useMemo(() => {
-    return currentUserMeetings.filter(m => m.status === 'Completed');
-  }, [currentUserMeetings]);
+    return meetings.filter(m => m.status === 'Completed');
+  }, [meetings]);
 
   const filteredUpcoming = useMemo(() => {
     return upcomingMeetings.filter(m => {
@@ -122,7 +114,7 @@ export const DashboardView: React.FC = () => {
             Welcome back, {currentUser.name.split(' ')[0]}.
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-            Viewing {currentUserMeetings.length} meetings assigned to your corporate profile.
+            Viewing {meetings.length} meetings assigned to your corporate profile.
           </p>
         </div>
 
@@ -130,7 +122,7 @@ export const DashboardView: React.FC = () => {
         <div className="flex items-center gap-6 pt-4 md:pt-0 border-t md:border-t-0 md:border-l border-slate-100 dark:border-slate-800 md:pl-8 shrink-0">
           <div className="text-center">
             <div className="text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 font-mono">
-              {currentUserMeetings.length}
+              {meetings.length}
             </div>
             <div className="text-xs font-semibold text-slate-400 mt-0.5">Your Meetings</div>
           </div>
@@ -224,7 +216,7 @@ export const DashboardView: React.FC = () => {
             onChange={(e) => setProjectFilter(e.target.value)}
             className="px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
           >
-            <option value="ALL">All Projects ({currentUserMeetings.length})</option>
+            <option value="ALL">All Projects ({meetings.length})</option>
             <option value="Design Systems">Design Systems</option>
             <option value="Core Infrastructure">Core Infrastructure</option>
             <option value="Security & Compliance">Security & Compliance</option>

@@ -1,10 +1,14 @@
 from pathlib import Path
 
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
 from app.core.celery_app import celery_app
 from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.database.session import SessionLocal
 from app.graph import contradiction_service, graph_builder
+from app.models.employee import Employee, MeetingParticipant
 from app.models.meeting import Meeting, ProcessingTask
 from app.schemas.meeting_intelligence import (
     ActionItem,
@@ -124,7 +128,26 @@ def _run_pipeline(meeting: Meeting, on_progress) -> MeetingIntelligence:
     return _analyze_transcript(meeting, segments, on_progress, name_timestamps, all_detected_names)
 
 
-def _save_and_graph(meeting: Meeting, intelligence: MeetingIntelligence) -> None:
+def _link_participants(db: Session, meeting_id: str, names: list[str]) -> None:
+    """Populate meeting_participants — the stable, SQL-backed access-control
+    source every endpoint checks against (app/core/auth.py's require_access,
+    app/api/meetings.py, graph.py) — from the same AI-extracted participant
+    list already written to the summary JSON and Neo4j. A name with no
+    matching Employee row is skipped: same "unrecognized name gets no
+    access" principle as the request-time identity header, not an error.
+    Existence-checked rather than a blind insert so re-processing the same
+    meeting (a retry) doesn't violate the (meeting_id, employee_id) unique
+    constraint."""
+    for name in names:
+        employee = db.query(Employee).filter(func.lower(Employee.name) == name.strip().lower()).first()
+        if employee is None:
+            continue
+        exists = db.query(MeetingParticipant).filter_by(meeting_id=meeting_id, employee_id=employee.id).first()
+        if exists is None:
+            db.add(MeetingParticipant(meeting_id=meeting_id, employee_id=employee.id))
+
+
+def _save_and_graph(db: Session, meeting: Meeting, intelligence: MeetingIntelligence) -> None:
     """Persist transcript/summary (StorageService, Task 1.1) and build the
     graph (Task 4.3), then write any CONTRADICTS edges (Task 4.4) now that
     this meeting's own Decision nodes exist."""
@@ -142,6 +165,7 @@ def _save_and_graph(meeting: Meeting, intelligence: MeetingIntelligence) -> None
         "risks": intelligence.risks,
         "knowledge_triples": [triple.model_dump() for triple in intelligence.knowledge_triples],
     })
+    _link_participants(db, meeting.id, intelligence.participants)
 
     graph_builder.build_from_meeting(meeting.id, meeting.title, meeting.project, intelligence, meeting.date)
 
@@ -183,7 +207,7 @@ def _process_meeting(task, meeting_id: str, run_pipeline) -> None:
             logger.info(f"[{meeting_id}] {pct}% — {message}")
 
         intelligence = run_pipeline(meeting, on_progress)
-        _save_and_graph(meeting, intelligence)
+        _save_and_graph(db, meeting, intelligence)
 
         task_record.status = "completed"
         meeting.status = "completed"

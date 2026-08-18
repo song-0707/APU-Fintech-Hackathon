@@ -1,51 +1,11 @@
-"""Tests for GET /meeting/{id}/export (Task 7.2)."""
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+"""Tests for GET /meeting/{id}/export (Task 7.2).
 
+db_session/client/caller_headers fixtures come from conftest.py — this file
+used to define its own db_session/client locally; that copy moved to
+conftest.py so test_dashboard.py/test_graph_api.py could share it once they
+also needed an isolated DB for the new access-control dependency."""
 from app.api import meetings as meetings_module
-from app.database.session import Base, get_db
-from app.main import app
 from app.models.meeting import Meeting
-
-
-@pytest.fixture
-def db_session():
-    # StaticPool pins every connection from this engine to the same
-    # underlying sqlite3 connection — without it, each new Session opens a
-    # *separate* (and separately empty) ":memory:" database, so tables
-    # created via create_all() below wouldn't be visible to the session the
-    # overridden get_db() dependency hands the route handler.
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-    def override_get_db():
-        db = TestingSessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    app.dependency_overrides[get_db] = override_get_db
-    session = TestingSessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        app.dependency_overrides.pop(get_db, None)
-
-
-@pytest.fixture
-def client():
-    return TestClient(app, raise_server_exceptions=False)
-
 
 FAKE_SUMMARY = {
     "duration": "00:15:20",
@@ -71,12 +31,12 @@ FAKE_SUMMARY = {
 }
 
 
-def test_export_meeting_not_found_returns_404(client, db_session):
-    response = client.get("/meeting/does-not-exist/export")
+def test_export_meeting_not_found_returns_404(client, db_session, caller_headers):
+    response = client.get("/meeting/does-not-exist/export", headers=caller_headers)
     assert response.status_code == 404
 
 
-def test_export_summary_not_ready_returns_202(client, db_session, monkeypatch):
+def test_export_summary_not_ready_returns_202(client, db_session, caller_headers, monkeypatch):
     meeting = Meeting(title="Unprocessed Meeting", status="processing")
     db_session.add(meeting)
     db_session.commit()
@@ -85,11 +45,11 @@ def test_export_summary_not_ready_returns_202(client, db_session, monkeypatch):
         meetings_module.storage, "get_file", lambda path: (_ for _ in ()).throw(FileNotFoundError())
     )
 
-    response = client.get(f"/meeting/{meeting.id}/export")
+    response = client.get(f"/meeting/{meeting.id}/export", headers=caller_headers)
     assert response.status_code == 202
 
 
-def test_export_returns_markdown_report_with_download_headers(client, db_session, monkeypatch):
+def test_export_returns_markdown_report_with_download_headers(client, db_session, caller_headers, monkeypatch):
     meeting = Meeting(title="Q3 Vendor Review", project="Core Infrastructure", date="2026-08-08", status="completed")
     db_session.add(meeting)
     db_session.commit()
@@ -100,7 +60,7 @@ def test_export_returns_markdown_report_with_download_headers(client, db_session
         meetings_module.storage, "get_file", lambda path: json.dumps(FAKE_SUMMARY)
     )
 
-    response = client.get(f"/meeting/{meeting.id}/export")
+    response = client.get(f"/meeting/{meeting.id}/export", headers=caller_headers)
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/markdown")

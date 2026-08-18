@@ -6,14 +6,44 @@ from app.core.config import get_settings
 from app.core.exceptions import unhandled_exception_handler
 from app.core.logger import get_logger
 from app.core.middleware import log_requests
-from app.database.session import Base, engine
+from app.database.session import Base, SessionLocal, engine
 from app.graph import graph_builder
 from app.models import meeting as _meeting_models  # noqa: F401 - registers models on Base
+from app.models import employee as _employee_models  # noqa: F401 - registers models on Base
+from app.models.employee import Employee
 
 settings = get_settings()
 logger = get_logger(__name__)
 
 Base.metadata.create_all(bind=engine)
+
+# Demo employee directory — reuses AppContext.tsx's initialEmployees
+# names/titles since those are the ones that already appear as speakers in
+# the bundled demo meeting data. This is the backend's only source of role
+# (is_management); request identity is asserted via the X-User-Name header
+# (see app/core/auth.py) and looked up here, not trusted directly.
+_DEMO_EMPLOYEES = [
+    ("Alex Mercer", "alex.mercer@corpbrain.ai", "VP of Product", True),
+    ("Sarah Jenkins", "sarah.jenkins@corpbrain.ai", "VP of Engineering", True),
+    ("Marcus Vance", "marcus.vance@corpbrain.ai", "Head of Product", True),
+    ("Elena Rostova", "elena.rostova@corpbrain.ai", "Chief Financial Officer", True),
+    ("David Chen", "david.chen@corpbrain.ai", "Principal AI Architect", False),
+    ("Amanda Brooks", "amanda.brooks@corpbrain.ai", "General Counsel", True),
+]
+
+
+def _seed_employees() -> None:
+    db = SessionLocal()
+    try:
+        if db.query(Employee).first() is None:
+            for name, email, title, is_management in _DEMO_EMPLOYEES:
+                db.add(Employee(name=name, email=email, title=title, is_management=is_management))
+            db.commit()
+    finally:
+        db.close()
+
+
+_seed_employees()
 
 try:
     graph_builder.ensure_constraints()

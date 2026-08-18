@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 from app.core.config import Settings
+from app.models.employee import Employee, MeetingParticipant
 from app.models.meeting import Meeting
 from app.schemas.meeting_intelligence import Decision, MeetingAnalysis
 from app.services import askcoco_service
@@ -114,6 +115,35 @@ def test_ask_coco_uses_predefined_action_item_query(monkeypatch):
     assert "Complete the security audit" in result["answer"]
 
 
+def test_link_participants_creates_rows_for_known_names_and_skips_unknown(db_session):
+    employee = Employee(name="Alex Mercer", email="alex.mercer@corpbrain.ai", is_management=True)
+    meeting = Meeting(title="Q3 Sync")
+    db_session.add_all([employee, meeting])
+    db_session.commit()
+
+    meeting_tasks._link_participants(db_session, meeting.id, ["Alex Mercer", "Nobody Recognized"])
+    db_session.commit()
+
+    rows = db_session.query(MeetingParticipant).filter_by(meeting_id=meeting.id).all()
+    assert len(rows) == 1
+    assert rows[0].employee_id == employee.id
+
+
+def test_link_participants_is_idempotent_on_reprocessing(db_session):
+    employee = Employee(name="Alex Mercer", email="alex.mercer@corpbrain.ai", is_management=True)
+    meeting = Meeting(title="Q3 Sync")
+    db_session.add_all([employee, meeting])
+    db_session.commit()
+
+    meeting_tasks._link_participants(db_session, meeting.id, ["Alex Mercer"])
+    db_session.commit()
+    meeting_tasks._link_participants(db_session, meeting.id, ["Alex Mercer"])
+    db_session.commit()
+
+    rows = db_session.query(MeetingParticipant).filter_by(meeting_id=meeting.id).all()
+    assert len(rows) == 1
+
+
 def test_storage_round_trips_live_segments(tmp_path):
     storage = StorageService(base_path=str(tmp_path))
     segments = [{"speaker": "Alex", "identity": "alex-123", "text": "hello", "timestamp": "00:00:01", "start": 1.2}]
@@ -174,7 +204,11 @@ def test_process_live_meeting_task_reads_segments_and_saves_graph(monkeypatch, t
         fake_intelligence = MagicMock(decisions=[], action_items=[], flags=[])
         monkeypatch.setattr(meeting_tasks, "_analyze_transcript", lambda meeting, segments, on_progress: fake_intelligence)
         save_and_graph_calls = []
-        monkeypatch.setattr(meeting_tasks, "_save_and_graph", lambda meeting, intelligence: save_and_graph_calls.append((meeting.id, intelligence)))
+        monkeypatch.setattr(
+            meeting_tasks,
+            "_save_and_graph",
+            lambda db, meeting, intelligence: save_and_graph_calls.append((meeting.id, intelligence)),
+        )
 
         meeting_tasks.process_live_meeting_task.run(meeting_id)
 

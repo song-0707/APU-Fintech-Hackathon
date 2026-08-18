@@ -1,25 +1,17 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { MeetingIntelligenceOverview } from './MeetingIntelligenceOverview';
 import { MeetingDetailView } from './MeetingDetailView';
 import { Meeting } from '../types';
 
+// meetings (from useApp) is already scoped to currentUser — the backend's
+// /meetings enforces that (see backend/app/api/meetings.py) — so this used
+// to re-filter it client-side with a looser, fuzzy name match; removed
+// rather than risk the two silently disagreeing.
 export const MeetingIntelligenceView: React.FC = () => {
   const { meetings, currentUser, openDmWithUser, selectedMeetingId, setSelectedMeetingId } = useApp();
 
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
-
-  // Strict user-based filtering: ONLY show meetings where currentUser is in participants!
-  const currentUserMeetings = useMemo(() => {
-    return meetings.filter(m => {
-      if (!m.participants) return false;
-      return m.participants.some(p => {
-        const pName = typeof p === 'string' ? p : (p as any).name || '';
-        return pName.toLowerCase().includes(currentUser.name.toLowerCase()) ||
-               currentUser.name.toLowerCase().includes(pName.toLowerCase());
-      });
-    });
-  }, [meetings, currentUser]);
 
   const handleSelectMeeting = (meeting: Meeting) => {
     setSelectedMeeting(meeting);
@@ -37,18 +29,18 @@ export const MeetingIntelligenceView: React.FC = () => {
 
   return (
     <div className="max-w-[1920px] w-full mx-auto px-8 py-6 animate-fade-in font-sans">
-      {selectedMeetingId && (selectedMeeting || currentUserMeetings.find(m => m.id === selectedMeetingId)) ? (
+      {selectedMeetingId && (selectedMeeting || meetings.find(m => m.id === selectedMeetingId)) ? (
         <MeetingDetailView
           selectedMeetingId={selectedMeetingId}
           meeting={selectedMeeting || undefined}
-          meetings={currentUserMeetings}
+          meetings={meetings}
           currentUser={currentUser}
           onBackToDashboard={handleBackToOverview}
           onSendDirectMessage={handleSendDirectMessage}
         />
       ) : (
         <MeetingIntelligenceOverview
-          meetings={currentUserMeetings}
+          meetings={meetings}
           onSelectMeeting={handleSelectMeeting}
           onSelectMeetingId={setSelectedMeetingId}
         />

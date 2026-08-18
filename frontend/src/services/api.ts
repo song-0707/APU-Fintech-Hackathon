@@ -138,8 +138,24 @@ export interface BackendContradictionDetail {
 
 // ── Raw fetch calls ─────────────────────────────────────────────────────
 
+let currentIdentity: string | null = null;
+
+/** Sets the identity sent as X-User-Name on every request from here on —
+ * the backend's only source of "who's asking" now that meetings/graph/
+ * dashboard endpoints enforce access server-side (see
+ * backend/app/core/auth.py). Call this whenever the logged-in user changes
+ * (see AppContext.tsx) — before any of the calls below, or they'll go out
+ * unidentified and the backend will reject them. */
+export function setApiIdentity(name: string): void {
+  currentIdentity = name;
+}
+
+function identityHeaders(): Record<string, string> {
+  return currentIdentity ? { 'X-User-Name': currentIdentity } : {};
+}
+
 async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(`${API_BASE}${path}`, { headers: identityHeaders() });
   if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
   return res.json();
 }
@@ -173,10 +189,13 @@ export async function getGraphData(meetingId: string): Promise<BackendGraphData 
 }
 
 /** Whole-organization graph (Task 6.6's Memory Graph page) — every
- * meeting/person/decision/action item/contradiction at once. */
-export async function getGlobalGraphData(): Promise<BackendGraphData | null> {
+ * meeting/person/decision/action item/contradiction at once, unless
+ * `person` is given, which scopes it to just their meetings (plus one hop
+ * of context on contradictions/relations — see backend api/graph.py). */
+export async function getGlobalGraphData(person?: string): Promise<BackendGraphData | null> {
   try {
-    return await apiGet('/graph');
+    const query = person ? `?person=${encodeURIComponent(person)}` : '';
+    return await apiGet(`/graph${query}`);
   } catch {
     return null;
   }
@@ -202,7 +221,7 @@ export async function uploadMeeting(
 }
 
 export async function deleteMeeting(meetingId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/meeting/${meetingId}`, { method: 'DELETE' });
+  const res = await fetch(`${API_BASE}/meeting/${meetingId}`, { method: 'DELETE', headers: identityHeaders() });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
 }
 
@@ -254,7 +273,7 @@ export function getMeetingExportUrl(meetingId: string): string {
  * user-readable message on failure (e.g. meeting not on the backend yet,
  * or still processing) — caller decides how to surface it. */
 export async function downloadMeetingReport(meetingId: string, suggestedFilename: string): Promise<void> {
-  const res = await fetch(getMeetingExportUrl(meetingId));
+  const res = await fetch(getMeetingExportUrl(meetingId), { headers: identityHeaders() });
   if (!res.ok) {
     if (res.status === 202) throw new Error('Report not ready yet — this meeting is still processing.');
     if (res.status === 404) throw new Error('This meeting has no exportable report on the backend yet.');

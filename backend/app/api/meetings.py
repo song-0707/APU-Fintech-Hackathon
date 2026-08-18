@@ -6,9 +6,11 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_employee, require_meeting_access
 from app.core.logger import get_logger
 from app.database.session import get_db
 from app.graph import graph_builder
+from app.models.employee import Employee, MeetingParticipant
 from app.models.meeting import Meeting, ProcessingTask
 from app.schemas.meeting import (
     MeetingCreate,
@@ -88,10 +90,15 @@ def get_task_status(meeting_id: str, db: Session = Depends(get_db)) -> MeetingSt
 
 # ── Delete meeting (SQL row + graph nodes + embeddings + files) ────────
 @router.delete("/meeting/{meeting_id}", status_code=204)
-def delete_meeting(meeting_id: str, db: Session = Depends(get_db)) -> Response:
+def delete_meeting(
+    meeting_id: str,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> Response:
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
     if meeting is None:
         raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+    require_meeting_access(db, meeting_id, caller)
 
     # Neo4j/Chroma may legitimately be down in local dev (same tolerance as
     # main.py's startup constraint setup and askcoco_service's graph
@@ -126,6 +133,7 @@ def list_meetings(
     participant: str | None = None,
     date: str | None = None,
     db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
 ) -> list[MeetingListItem]:
     query = db.query(Meeting)
     if keyword:
@@ -135,8 +143,23 @@ def list_meetings(
     if date:
         query = query.filter(Meeting.date == date)
 
+    # Access control, always on: an employee only ever sees meetings they're
+    # a recorded participant of. `participant` below stays a plain search
+    # filter *within* that set — it used to be the only scoping this
+    # endpoint had, which is exactly what let a direct API call see
+    # everything by just omitting it.
+    accessible_ids: set[str] | None = None
+    if not caller.is_management:
+        accessible_ids = {
+            mp.meeting_id
+            for mp in db.query(MeetingParticipant).filter_by(employee_id=caller.id)
+        }
+
     items: list[MeetingListItem] = []
     for meeting in query.order_by(Meeting.created_at.desc()).all():
+        if accessible_ids is not None and meeting.id not in accessible_ids:
+            continue
+
         summary = _load_json(f"summaries/{meeting.id}.json")
         participants = summary.get("participants", []) if summary else []
 
@@ -159,10 +182,15 @@ def list_meetings(
 
 # ── Task 5.2 — Transcript ──────────────────────────────────────────────
 @router.get("/meeting/{meeting_id}/transcript")
-def get_meeting_transcript(meeting_id: str, db: Session = Depends(get_db)) -> dict:
+def get_meeting_transcript(
+    meeting_id: str,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> dict:
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
     if meeting is None:
         raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+    require_meeting_access(db, meeting_id, caller)
 
     transcript = _load_json(f"transcripts/{meeting_id}.json")
     if transcript is None:
@@ -172,10 +200,15 @@ def get_meeting_transcript(meeting_id: str, db: Session = Depends(get_db)) -> di
 
 # ── Task 5.3 — Summary (decisions, action items, flags) ────────────────
 @router.get("/meeting/{meeting_id}/summary")
-def get_meeting_summary(meeting_id: str, db: Session = Depends(get_db)) -> dict:
+def get_meeting_summary(
+    meeting_id: str,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> dict:
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
     if meeting is None:
         raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+    require_meeting_access(db, meeting_id, caller)
 
     summary = _load_json(f"summaries/{meeting_id}.json")
     if summary is None:
@@ -185,10 +218,15 @@ def get_meeting_summary(meeting_id: str, db: Session = Depends(get_db)) -> dict:
 
 # ── Task 7.2 — Export Report ────────────────────────────────────────────
 @router.get("/meeting/{meeting_id}/export")
-def export_meeting_report(meeting_id: str, db: Session = Depends(get_db)) -> Response:
+def export_meeting_report(
+    meeting_id: str,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> Response:
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
     if meeting is None:
         raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+    require_meeting_access(db, meeting_id, caller)
 
     summary = _load_json(f"summaries/{meeting_id}.json")
     if summary is None:

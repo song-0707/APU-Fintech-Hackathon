@@ -14,18 +14,6 @@ import {
 import { INITIAL_USER_PROFILE } from '../mock/mockData';
 import * as api from '../services/api';
 
-/** AI-extracted participants reflect who was actually heard in the
- * recording, not necessarily whoever is logged in — without this, a fully
- * processed meeting silently disappears from every "my meetings" view
- * (Dashboard, Meeting Intelligence) whenever the demo user wasn't a real
- * attendee. Used both on initial load and right after live upload. */
-function ensureCurrentUserIsParticipant(meeting: Meeting, currentUserName: string): Meeting {
-  const alreadyListed = meeting.participants.some(
-    (p) => p.toLowerCase() === currentUserName.toLowerCase()
-  );
-  return alreadyListed ? meeting : { ...meeting, participants: [...meeting.participants, currentUserName] };
-}
-
 // Mock Employees Directory
 const initialEmployees: Employee[] = [
   {
@@ -560,6 +548,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [selectedChatUserId, setSelectedChatUserId] = useState<string>('emp-1');
   const [isCreateMeetingOpen, setIsCreateMeetingOpen] = useState<boolean>(false);
 
+  // Keep the backend's identity header in sync with whoever's logged in —
+  // every api.* call reads this (see api.ts's setApiIdentity/apiGet), and
+  // it must run before any of them fire, including the mount-time effect
+  // right below, so declared first.
+  useEffect(() => {
+    api.setApiIdentity(currentUser.name);
+  }, [currentUser.name]);
+
   // Load real meetings from the backend (docs/IMPLEMENTATION_PLAN.md Phase 5)
   // and merge them ahead of the bundled mock data. If the backend isn't
   // running (e.g. frontend-only dev work, or Task 9.2's live-processing
@@ -597,14 +593,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const loaded: Meeting[] = [];
         results.forEach((result, i) => {
           if (result.status === 'fulfilled') {
-            // AI-extracted participants are whoever the model actually heard
-            // in the recording — for a real upload that's real names, not
-            // necessarily the demo's currentUser. Without this, any meeting
-            // where currentUser wasn't personally on the call is invisible
-            // in every "my meetings" personalized view (Dashboard, Meeting
-            // Intelligence both filter on participant name) from the very
-            // first page load, even though it's genuinely fully processed.
-            loaded.push(ensureCurrentUserIsParticipant(result.value, currentUser.name));
+            loaded.push(result.value);
           } else {
             console.error(`[Corporate Brain] Failed to load meeting ${items[i].id} ("${items[i].title}"):`, result.reason);
           }
@@ -788,8 +777,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             setMeetings(prev => prev.map(m => {
               if (m.id !== meetingId) return m;
-              const merged = api.mergeBackendIntoMeeting(m, listItem, summary, transcript, graphData);
-              return ensureCurrentUserIsParticipant(merged, currentUser.name);
+              return api.mergeBackendIntoMeeting(m, listItem, summary, transcript, graphData);
             }));
 
             setNotifications(prev => [

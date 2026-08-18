@@ -11,11 +11,16 @@ changes) separately from `coalesce(display_name, name)` (used only for the
 rendered label). Meeting/Decision/ActionItem already have a separate id
 field from their title/text/task, so those are coalesced in place.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_employee, require_access, require_meeting_access
 from app.core.logger import get_logger
+from app.database.session import get_db
 from app.graph import graph_builder, neo4j_service
+from app.models.employee import Employee, MeetingParticipant
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -57,7 +62,13 @@ def _drop_dangling_links(nodes: dict[str, dict], links: list[dict]) -> list[dict
 
 
 @router.get("/meeting/{meeting_id}/graph-data")
-def get_meeting_graph_data(meeting_id: str) -> dict:
+def get_meeting_graph_data(
+    meeting_id: str,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> dict:
+    require_meeting_access(db, meeting_id, caller)
+
     meeting_rows = neo4j_service.run_query(
         "MATCH (m:Meeting {id: $id}) RETURN m.id AS id, coalesce(m.display_name, m.title) AS title",
         id=meeting_id,
@@ -202,13 +213,18 @@ def get_meeting_graph_data(meeting_id: str) -> dict:
 
 
 @router.get("/graph/contradictions")
-def get_contradictions(person: str | None = None) -> list[dict]:
+def get_contradictions(
+    person: str | None = None,
+    caller: Employee = Depends(get_current_employee),
+) -> list[dict]:
     """Every CONTRADICTS edge in the graph, with enough context (both
     decisions' text, both meetings' id+title, who made the flagged decision)
     for a frontend drill-down — e.g. DashboardView's "Your Flags" count,
-    which today shows a number with nothing behind it. Optional `person`
-    matches dashboard_service.get_dashboard()'s existing scoping: only
-    contradictions in decisions that person made."""
+    which today shows a number with nothing behind it. `person` defaults to
+    the caller and is otherwise resolved/checked by _resolve_target: only
+    contradictions in decisions that person made, org-wide only for a
+    management caller who omits it."""
+    target = _resolve_target(person, caller)
     return neo4j_service.run_query(
         "MATCH (d:Decision)-[c:CONTRADICTS]->(other:Decision) "
         "OPTIONAL MATCH (d)-[:MADE_BY]->(p:Person) "
@@ -229,15 +245,85 @@ def get_contradictions(person: str | None = None) -> list[dict]:
         "coalesce(om.display_name, om.title) AS contradicts_meeting_title, "
         "c.message AS message "
         "ORDER BY d.timestamp DESC",
-        person=person,
+        person=target,
     )
 
 
+_CONTAINMENT_LINK_TYPES = {
+    "PARTICIPATED_IN", "MADE_IN", "MADE_BY", "ASSIGNED_TO", "RELATES_TO", "MENTIONED_IN",
+}
+
+
+def _resolve_target(person: str | None, caller: Employee) -> str | None:
+    """Resolve /graph's and /graph/contradictions' `person` param into
+    whose meetings to scope to. None means "org-wide" — only reachable by a
+    management caller who passed no `person`. Any explicit `person` (self,
+    or anyone else if the caller is management) is checked via
+    require_access before being returned."""
+    if person is not None:
+        require_access(person, caller)
+        return person
+    return None if caller.is_management else caller.name
+
+
+def _scope_to_meetings(nodes: dict[str, dict], links: list[dict], meeting_ids: set[str]) -> tuple[dict, list]:
+    """Restrict a full graph to the given meetings and everything IN them,
+    plus one hop out on CONTRADICTS/knowledge-triple edges so the *other*
+    side of a flagged contradiction (or a related entity) stays visible —
+    hiding why something was flagged would defeat the point of showing it.
+    `meeting_ids` comes from the SQL meeting_participants table (the stable
+    access-control source — see app/core/auth.py), not from matching a name
+    against the graph itself."""
+    core_meetings = {f"meeting:{mid}" for mid in meeting_ids}
+    if not core_meetings:
+        return {}, []
+
+    # Containment edges expand to a fixed point: e.g. a Decision only enters
+    # scope via MADE_IN, and its own RELATES_TO->Project edge can only be
+    # followed once the Decision itself already is.
+    in_scope = set(core_meetings)
+    changed = True
+    while changed:
+        changed = False
+        for l in links:
+            if l["type"] not in _CONTAINMENT_LINK_TYPES:
+                continue
+            if l["source"] in in_scope and l["target"] not in in_scope:
+                in_scope.add(l["target"])
+                changed = True
+            elif l["target"] in in_scope and l["source"] not in in_scope:
+                in_scope.add(l["source"])
+                changed = True
+
+    # One hop of context: CONTRADICTS edges, and knowledge-triple edges
+    # (their `type` is the raw predicate — see the RELATES_AS block below —
+    # so they never match a name in _CONTAINMENT_LINK_TYPES).
+    extra: set[str] = set()
+    for l in links:
+        is_context_edge = l["type"] == "CONTRADICTS" or l["type"] not in _CONTAINMENT_LINK_TYPES
+        if is_context_edge and (l["source"] in in_scope or l["target"] in in_scope):
+            extra.add(l["source"])
+            extra.add(l["target"])
+    in_scope |= extra
+
+    scoped_nodes = {nid: n for nid, n in nodes.items() if nid in in_scope}
+    scoped_links = [l for l in links if l["source"] in in_scope and l["target"] in in_scope]
+    return scoped_nodes, scoped_links
+
+
 @router.get("/graph")
-def get_global_graph_data() -> dict:
-    """Whole-organization knowledge graph (Task 6.6's 'Memory Graph' page) —
-    every meeting/person/decision/action item/contradiction at once, not
-    scoped to a single meeting."""
+def get_global_graph_data(
+    person: str | None = None,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> dict:
+    """Whole-organization knowledge graph (Task 6.6's 'Memory Graph' page).
+    Defaults to the caller's own meetings (see _scope_to_meetings) — an
+    unrecognized/unauthorized caller gets an empty graph, never the full
+    org. Pass `person` to view a specific employee's slice instead
+    (management-only, checked via _resolve_target); a management caller
+    passing no `person` gets the unfiltered org-wide view, unchanged from
+    before."""
     nodes: dict[str, dict] = {}
     links: list[dict] = []
 
@@ -351,5 +437,19 @@ def get_global_graph_data() -> dict:
             "isContradiction": True,
             "message": row["message"],
         })
+
+    target = _resolve_target(person, caller)
+    if target is not None:
+        target_employee = (
+            caller if target.lower() == caller.name.lower()
+            else db.query(Employee).filter(func.lower(Employee.name) == target.lower()).first()
+        )
+        meeting_ids: set[str] = set()
+        if target_employee is not None:
+            meeting_ids = {
+                mp.meeting_id
+                for mp in db.query(MeetingParticipant).filter_by(employee_id=target_employee.id)
+            }
+        nodes, links = _scope_to_meetings(nodes, links, meeting_ids)
 
     return {"nodes": list(nodes.values()), "links": _drop_dangling_links(nodes, links)}
