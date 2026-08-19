@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { LiveMinuteSummary, useLiveMeetingSession } from '../hooks/useLiveMeetingSession';
+import { useLiveMeetingSession } from '../hooks/useLiveMeetingSession';
 import { askCoco, BackendCitation } from '../services/api';
 import { CollaborativeWhiteboard } from './CollaborativeWhiteboard';
 import { LiveSuggestionBanner } from './LiveSuggestionBanner';
@@ -78,65 +78,17 @@ const ToggleButton: React.FC<{
   icon: React.ReactNode;
   inactiveIcon: React.ReactNode;
 }> = ({ label, enabled, onClick, icon, inactiveIcon }) => (
-  <button onClick={onClick} className={`flex min-w-20 flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${enabled ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700' : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/50'}`}>
+  <button onClick={onClick} className={`flex min-w-20 flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${enabled ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-rose-50 text-rose-700 hover:bg-rose-100'}`}>
     {enabled ? icon : inactiveIcon}<span>{label}</span>
   </button>
 );
 
 type CocoMessage = { role: 'user' | 'coco'; text: string; citations?: BackendCitation[] };
 
-const wantsLiveContext = (query: string) => {
-  const lowered = query.toLowerCase();
-  return [
-    'what did i miss', 'missed', 'before i joined', 'just discussed',
-    'live so far', 'so far', 'current meeting', 'this meeting',
-  ].some((phrase) => lowered.includes(phrase));
-};
-
-const liveAnswer = (query: string, liveSummaries: LiveMinuteSummary[], missedSummaries: LiveMinuteSummary[]) => {
-  const lowered = query.toLowerCase();
-  const source = lowered.includes('miss') || lowered.includes('before i joined')
-    ? missedSummaries
-    : lowered.includes('just') || lowered.includes('recent')
-    ? liveSummaries.slice(-1)
-    : liveSummaries;
-
-  if (source.length === 0) {
-    return {
-      answer: 'I do not have enough live meeting context yet. Keep the microphone unmuted and wait for the first minute summary.',
-      citations: [],
-    };
-  }
-
-  const decisions = source.flatMap((item) => item.decisions.map((decision) => `${item.label}: ${decision}`));
-  const actions = source.flatMap((item) => item.action_items.map((action) => `${item.label}: ${action.task}${action.assignee ? ` — ${action.assignee}` : ''}`));
-  const risks = source.flatMap((item) => item.risks.map((risk) => `${item.label}: ${risk}`));
-  const summaryLines = source.map((item) => `${item.label}: ${item.summary}`);
-  const sections = [
-    summaryLines.join('\n'),
-    decisions.length ? `\nDecisions:\n${decisions.slice(0, 5).join('\n')}` : '',
-    actions.length ? `\nAction items:\n${actions.slice(0, 5).join('\n')}` : '',
-    risks.length ? `\nRisks:\n${risks.slice(0, 5).join('\n')}` : '',
-  ].filter(Boolean);
-
-  return {
-    answer: sections.join('\n'),
-    citations: source.slice(-3).map((item) => ({
-      filename: `Live meeting ${item.label}`,
-      speaker: 'Live minute intelligence',
-      timestamp: item.label,
-      excerpt: item.summary,
-    })),
-  };
-};
-
-// Historical questions use the same secured POST /query backend as
-// CocoChatView; live-meeting catch-up questions are answered from the
-// room's provisional minute summaries.
-const CocoPanel: React.FC<{
-  minuteSummaries: LiveMinuteSummary[];
-  missedMinuteSummaries: LiveMinuteSummary[];
-}> = ({ minuteSummaries, missedMinuteSummaries }) => {
+// Reuses the same POST /query backend CocoChatView.tsx calls — grounded in
+// past meetings/decisions/action items, not a general chatbot — so
+// participants can pull up prior context without leaving the call.
+const CocoPanel: React.FC = () => {
   const [messages, setMessages] = useState<CocoMessage[]>([]);
   const [input, setInput] = useState('');
   const [isAsking, setIsAsking] = useState(false);
@@ -148,9 +100,7 @@ const CocoPanel: React.FC<{
     setMessages((prev) => [...prev, { role: 'user', text: query }]);
     setIsAsking(true);
     try {
-      const result = wantsLiveContext(query)
-        ? liveAnswer(query, minuteSummaries, missedMinuteSummaries)
-        : await askCoco(query);
+      const result = await askCoco(query);
       setMessages((prev) => [...prev, { role: 'coco', text: result.answer, citations: result.citations }]);
     } catch {
       setMessages((prev) => [...prev, { role: 'coco', text: "I couldn't reach the Ask Coco backend just now." }]);
@@ -160,16 +110,16 @@ const CocoPanel: React.FC<{
   };
 
   return (
-    <section className="rounded-2xl border border-violet-200 dark:border-violet-900/60 bg-violet-50/40 dark:bg-violet-950/30 p-4 space-y-3">
-      <div className="flex items-center gap-2 text-sm font-bold text-violet-700 dark:text-violet-300">
+    <section className="rounded-2xl border border-violet-200 bg-violet-50/40 p-4 space-y-3">
+      <div className="flex items-center gap-2 text-sm font-bold text-violet-700">
         <Sparkles className="h-4 w-4" /> Ask Coco
-        <span className="font-normal text-violet-500 dark:text-violet-400">— live and past meeting context</span>
+        <span className="font-normal text-violet-500">— grounded in past meetings</span>
       </div>
 
       <div className="max-h-64 overflow-y-auto space-y-2.5 pr-1">
         {messages.length === 0 && (
           <p className="text-xs text-slate-400">
-            Ask what you missed, what was just discussed, or about past decisions without leaving the call.
+            Ask about past decisions, action items, or contradictions without leaving the call — e.g. "what did we decide about the vendor?"
           </p>
         )}
         {messages.map((m, i) => (
@@ -178,7 +128,7 @@ const CocoPanel: React.FC<{
               className={`inline-block max-w-[92%] rounded-xl px-3 py-2 text-xs whitespace-pre-wrap text-left ${
                 m.role === 'user'
                   ? 'bg-blue-600 text-white'
-                  : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                  : 'bg-white border border-slate-200 text-slate-700'
               }`}
             >
               {m.text}
@@ -206,7 +156,7 @@ const CocoPanel: React.FC<{
             if (e.key === 'Enter') send();
           }}
           placeholder="Ask a question…"
-          className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white px-3 py-2 text-xs outline-none focus:border-blue-600 dark:focus:border-blue-500"
+          className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-xs outline-none focus:border-blue-600"
         />
         <button
           onClick={() => void send()}
@@ -237,8 +187,8 @@ const RoomContent: React.FC<{
   const [showTranscript, setShowTranscript] = useState(false);
   const [isScreenEnlarged, setIsScreenEnlarged] = useState(false);
   const [isProcessingPipeline, setIsProcessingPipeline] = useState(false);
+  const [pipelineStep, setPipelineStep] = useState(0);
   const liveSession = useLiveMeetingSession(roomName, token);
-  const meetingServiceError = mediaError || liveSession.captionsError || liveSession.connectionError;
 
   const toggle = async (kind: 'microphone' | 'camera' | 'screen') => {
     try {
@@ -252,13 +202,41 @@ const RoomContent: React.FC<{
   };
 
   const handleLeaveMeeting = () => {
-    if (isProcessingPipeline) return;
     setIsProcessingPipeline(true);
-    window.setTimeout(() => {
-      setIsProcessingPipeline(false);
-      onLeave();
-    }, 900);
+    setPipelineStep(1);
+
+    const steps = [
+      'Extracting audio (16kHz mono WAV)...',
+      'Running PyAnnote 3.1 speaker diarization timeline...',
+      'Deepgram & Whisper timestamped transcription...',
+      'Gemini Vision reading speaker nameplates...',
+      'Gemini 2.5 Flash extracting decisions, actions & flags...',
+      'Indexing results into Corporate Brain & saving whiteboard PDF...'
+    ];
+
+    let current = 1;
+    const interval = setInterval(() => {
+      current += 1;
+      if (current <= steps.length) {
+        setPipelineStep(current);
+      } else {
+        clearInterval(interval);
+        setTimeout(() => {
+          setIsProcessingPipeline(false);
+          onLeave();
+        }, 600);
+      }
+    }, 600);
   };
+
+  const pipelineStages = [
+    { title: 'Audio Extraction', desc: 'ffmpeg: video -> 16kHz mono WAV' },
+    { title: 'Speaker Diarization', desc: 'PyAnnote 3.1 speaker timeline alignment' },
+    { title: 'Deepgram & Whisper ASR', desc: 'Timestamped transcript generation' },
+    { title: 'Gemini Vision Nameplates', desc: 'Extracting video frame nameplates' },
+    { title: 'Gemini Flash AI Analysis', desc: 'Extracting decisions, rationale & action items' },
+    { title: 'Knowledge Graph Ingestion', desc: 'Saving meeting intelligence & whiteboard PDF' }
+  ];
 
   return (
     <div data-meeting-recording-area className="space-y-5 p-4 pb-28 sm:p-6 sm:pb-28">
@@ -267,30 +245,30 @@ const RoomContent: React.FC<{
           <div className="flex items-center gap-2">
           </div>
           <div className="mt-1 flex items-center gap-2">
-            <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white font-sans">Room Code: {roomName}</h1>
+            <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 font-sans">Room Code: {roomName}</h1>
             <button
               type="button"
               onClick={() => {
                 navigator.clipboard.writeText(roomName);
                 alert(`Room Code "${roomName}" copied to clipboard! Share this exact code with teammates to join this session.`);
               }}
-              className="px-2.5 py-1 text-xs bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-600 dark:text-blue-400 font-bold rounded-lg border border-blue-200 dark:border-blue-900 transition-colors cursor-pointer"
+              className="px-2.5 py-1 text-xs bg-blue-50 hover:bg-blue-100 text-blue-600 font-bold rounded-lg border border-blue-200 transition-colors cursor-pointer"
             >
               Copy Room Code
             </button>
           </div>
         </div>
-        <span className="flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400"><Users className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />{participants.length} participant{participants.length === 1 ? '' : 's'}</span>
+        <span className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600"><Users className="h-4 w-4 text-indigo-600" />{participants.length} participant{participants.length === 1 ? '' : 's'}</span>
       </div>
 
-      {meetingServiceError && <div className="flex items-start gap-2 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/40 p-3 text-sm text-amber-800 dark:text-amber-300"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{meetingServiceError}</div>}
+      {mediaError && <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{mediaError}</div>}
 
       <LiveSuggestionBanner suggestions={liveSession.suggestions} onDismiss={liveSession.dismissSuggestion} />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_270px]">
         <div className="space-y-4">
           {screenTracks.length > 0 && (
-            <section className="relative overflow-hidden rounded-2xl border border-blue-200 dark:border-blue-900 bg-slate-950 shadow-sm group">
+            <section className="relative overflow-hidden rounded-2xl border border-blue-200 bg-slate-950 shadow-sm group">
               <div className="flex items-center justify-between bg-blue-600 px-3 py-2 text-xs font-bold text-white">
                 <div className="flex items-center gap-2">
                   <MonitorUp className="h-4 w-4" />
@@ -346,7 +324,7 @@ const RoomContent: React.FC<{
               </div>
             </div>
           )}
-          <section className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 shadow-sm">
+          <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
               {cameraTracks.length > 0 ? cameraTracks.map((track) => (
                 <div key={`${track.participant.identity}-${track.publication.trackSid}`} className="relative aspect-video overflow-hidden rounded-xl bg-slate-900">
@@ -354,40 +332,29 @@ const RoomContent: React.FC<{
                   <span className="absolute bottom-2 left-2 rounded-md bg-slate-950/70 px-2 py-1 text-xs font-semibold text-white">{track.participant.name || track.participant.identity}</span>
                 </div>
               )) : (
-                <div className="col-span-full grid min-h-52 place-items-center rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 text-sm text-slate-500 dark:text-slate-400">Turn on your camera to start the video grid.</div>
+                <div className="col-span-full grid min-h-52 place-items-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-sm text-slate-500">Turn on your camera to start the video grid.</div>
               )}
             </div>
           </section>
           <CollaborativeWhiteboard roomName={roomName} />
-          {showCoco && (
-            <CocoPanel
-              minuteSummaries={liveSession.minuteSummaries}
-              missedMinuteSummaries={liveSession.missedMinuteSummaries}
-            />
-          )}
-          {showTranscript && (
-            <LiveTranscriptPanel
-              transcript={liveSession.transcript}
-              minuteSummaries={liveSession.minuteSummaries}
-              error={liveSession.captionsError || liveSession.connectionError}
-            />
-          )}
+          {showCoco && <CocoPanel />}
+          {showTranscript && <LiveTranscriptPanel transcript={liveSession.transcript} error={liveSession.captionsError || liveSession.connectionError} />}
         </div>
 
-        <aside className="h-fit rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm xl:sticky xl:top-4">
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-bold text-slate-800 dark:text-slate-200"><Users className="h-4 w-4 text-blue-600 dark:text-blue-400" />Participants</h2>
+        <aside className="h-fit rounded-2xl border border-slate-200 bg-white p-4 shadow-sm xl:sticky xl:top-4">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-bold text-slate-800"><Users className="h-4 w-4 text-blue-600" />Participants</h2>
           <ul className="space-y-2">
             {participants.map((participant) => (
-              <li key={participant.identity} className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 px-3 py-2">
-                <div className="min-w-0"><p className="truncate text-xs font-bold text-slate-700 dark:text-slate-300">{participant.name || participant.identity}</p><p className="text-[10px] text-slate-400">{participant.isSpeaking ? 'Speaking…' : 'In meeting'}</p></div>
-                <div className="flex items-center gap-1.5">{participant.isSpeaking && <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />}{participant.isMicrophoneEnabled ? <Mic className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" /> : <MicOff className="h-3.5 w-3.5 text-rose-500" />}{participant.isCameraEnabled ? <Camera className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" /> : <CameraOff className="h-3.5 w-3.5 text-rose-500" />}</div>
+              <li key={participant.identity} className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2">
+                <div className="min-w-0"><p className="truncate text-xs font-bold text-slate-700">{participant.name || participant.identity}</p><p className="text-[10px] text-slate-400">{participant.isSpeaking ? 'Speaking…' : 'In meeting'}</p></div>
+                <div className="flex items-center gap-1.5">{participant.isSpeaking && <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />}{participant.isMicrophoneEnabled ? <Mic className="h-3.5 w-3.5 text-slate-500" /> : <MicOff className="h-3.5 w-3.5 text-rose-500" />}{participant.isCameraEnabled ? <Camera className="h-3.5 w-3.5 text-slate-500" /> : <CameraOff className="h-3.5 w-3.5 text-rose-500" />}</div>
               </li>
             ))}
           </ul>
         </aside>
       </div>
 
-      <div className={`fixed bottom-3 z-40 flex w-max flex-nowrap items-center justify-center gap-2 overflow-visible rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 p-2 shadow-lg backdrop-blur ${
+      <div className={`fixed bottom-3 z-40 flex w-max flex-nowrap items-center justify-center gap-2 overflow-visible rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-lg backdrop-blur ${
         isFullscreen
           ? 'left-1/2 max-w-[calc(100%-1.5rem)] -translate-x-1/2'
           : 'left-[calc(50%+9rem)] max-w-[calc(100%-19.5rem)] -translate-x-1/2'
@@ -397,15 +364,15 @@ const RoomContent: React.FC<{
         <button
           onClick={() => setShowCoco((v) => !v)}
           className={`flex min-w-20 flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
-            showCoco ? 'bg-violet-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+            showCoco ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
           }`}
         >
           <Sparkles className="h-5 w-5" /><span>Coco</span>
         </button>
         <button
-          onClick={() => setShowTranscript((v) => !v)}
+          onClick={() => { setShowTranscript((v) => !v); liveSession.toggleCaptions(); }}
           className={`flex min-w-20 flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
-            showTranscript ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+            liveSession.captionsEnabled ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
           }`}
         >
           <Captions className="h-5 w-5" /><span>Transcript</span>
@@ -419,31 +386,64 @@ const RoomContent: React.FC<{
           inactiveIcon={isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
         />
         <MeetingRecorder roomName={roomName} onError={setMediaError} />
-        <button
-          onClick={handleLeaveMeeting}
-          disabled={isProcessingPipeline}
-          className="flex min-w-20 flex-col items-center gap-1 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
-        >
-          <LogOut className="h-5 w-5" /><span>Leave</span>
-        </button>
+        <button onClick={handleLeaveMeeting} className="flex min-w-20 flex-col items-center gap-1 rounded-xl bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700 cursor-pointer"><LogOut className="h-5 w-5" /><span>Leave</span></button>
       </div>
 
-      {/* Honest leave state: backend finalization is room-wide after everyone disconnects. */}
+      {/* MEETINGS/pipeline.py Auto Intelligence Extraction Modal */}
       {isProcessingPipeline && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-md animate-fade-in font-sans">
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-2xl space-y-4">
-            <div className="flex items-center space-x-3">
+          <div className="w-full max-w-lg rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 shadow-2xl space-y-6">
+            <div className="flex items-center space-x-3 pb-3 border-b border-slate-100 dark:border-slate-800">
               <div className="p-2.5 bg-blue-50 dark:bg-blue-950/80 rounded-2xl text-blue-600 dark:text-blue-400">
                 <Sparkles className="w-6 h-6 animate-pulse" />
               </div>
               <div>
                 <h3 className="text-base font-extrabold text-slate-900 dark:text-white font-sans">
-                  Leaving Meeting
+                  Meeting Intelligence Pipeline Extraction
                 </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Captured transcript content will be finalized after the room ends.
+                <p className="text-xs text-slate-400 font-mono">
+                  Simulating MEETINGS/pipeline.py workflow
                 </p>
               </div>
+            </div>
+
+            <div className="space-y-3">
+              {pipelineStages.map((stage, idx) => {
+                const stageNum = idx + 1;
+                const isDone = pipelineStep > stageNum;
+                const isCurrent = pipelineStep === stageNum;
+                return (
+                  <div
+                    key={idx}
+                    className={`p-3 rounded-2xl border transition-all flex items-center justify-between ${
+                      isDone
+                        ? 'bg-emerald-50/60 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-200'
+                        : isCurrent
+                        ? 'bg-blue-50/80 dark:bg-blue-950/60 border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-200 shadow-sm'
+                        : 'bg-slate-50 dark:bg-slate-800/40 border-slate-100 dark:border-slate-800 text-slate-400 opacity-60'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold font-mono ${
+                        isDone
+                          ? 'bg-emerald-600 text-white'
+                          : isCurrent
+                          ? 'bg-blue-600 text-white animate-bounce'
+                          : 'bg-slate-200 dark:bg-slate-700 text-slate-500'
+                      }`}>
+                        {stageNum}
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold font-sans">{stage.title}</div>
+                        <div className="text-[10px] opacity-80 font-mono">{stage.desc}</div>
+                      </div>
+                    </div>
+
+                    {isDone && <span className="text-xs font-bold font-mono text-emerald-600">DONE</span>}
+                    {isCurrent && <span className="text-xs font-bold font-mono text-blue-600 animate-pulse">RUNNING...</span>}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -486,7 +486,7 @@ export const MeetingRoomView: React.FC = () => {
   };
 
   return (
-    <div ref={fullscreenRootRef} className={isFullscreen ? 'h-screen w-screen overflow-y-auto bg-slate-50 dark:bg-slate-950' : ''}>
+    <div ref={fullscreenRootRef} className={isFullscreen ? 'h-screen w-screen overflow-y-auto bg-slate-50' : ''}>
       {joinDetails ? (
         <LiveKitRoom token={joinDetails.token} serverUrl={joinDetails.serverUrl} connect audio video onError={(roomError) => setError(roomError.message)}>
           <RoomAudioRenderer />

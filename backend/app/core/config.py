@@ -7,12 +7,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.6-flash"
-    gemini_vertex_model: str = "gemini-2.5-flash"
-    gemini_service_account_file: str = ""
-    gemini_project_id: str = ""
-    gemini_location: str = "us-central1"
-    google_application_credentials: str = ""
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_username: str = "neo4j"
     neo4j_password: str

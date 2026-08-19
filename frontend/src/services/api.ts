@@ -22,7 +22,6 @@ export interface BackendMeetingListItem {
   decisions_count: number;
   action_items_count: number;
   flags_count: number;
-  audio_filename: string | null;
 }
 
 interface BackendDecision {
@@ -246,29 +245,11 @@ export async function setNodeDisplayName(
 export async function askCoco(query: string): Promise<BackendQueryResponse> {
   const res = await fetch(`${API_BASE}/query`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...identityHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query }),
   });
   if (!res.ok) throw new Error(`Ask Coco failed: ${res.status}`);
   return res.json();
-}
-
-export interface BackendBrief {
-  meeting_id: string;
-  related_meetings: Array<{ id: string; title: string; date: string | null }>;
-  decisions: Array<{ text: string; confidence: string; speaker: string | null; meeting: string }>;
-  related_action_items: Array<{ task: string; assignee: string | null; deadline: string | null; meeting: string }>;
-  contradictions: Array<{ decision: string; conflicts_with: string; message: string | null; meeting: string }>;
-  risks: string[];
-  suggested_agenda: string[];
-}
-
-/** GET /meetings/{id}/brief — related previous meetings (same project),
- * their decisions/action items/contradictions/risks, and a suggested
- * agenda. Only meaningful for meetings with a real backend id (see
- * DashboardView.tsx's guard) — mock/locally-scheduled meetings 404. */
-export async function getMeetingBrief(meetingId: string): Promise<BackendBrief> {
-  return apiGet(`/meetings/${meetingId}/brief`);
 }
 
 export async function getUserDashboard(userId: string): Promise<BackendDashboard> {
@@ -493,14 +474,7 @@ export function mergeBackendIntoMeeting(
     actionItems: summary ? summary.action_items.map((a, i) => toActionItem(a, base.id, i)) : base.actionItems || [],
     transcript: transcript ? toTranscript(transcript.transcript, base.id) : base.transcript || [],
     contradictions: summary ? summary.flags.map((f, i) => toContradiction(f, base as any, i)) : base.contradictions || [],
-    // The backend now persists/returns the real filename (set only when a
-    // meeting was actually created via file upload -- see meetings.py's
-    // /upload endpoint and Meeting.file_path). Prefer it over `base`, which
-    // was previously the only source: a client-local, session-only value
-    // set optimistically at upload time that reverted to nothing on any
-    // full reload, showing "Awaiting Audio Recording" on meetings that were
-    // in fact long since fully processed.
-    audioFileName: item.audio_filename ?? base.audioFileName,
+    audioFileName: base.audioFileName,
     fileSize: base.fileSize,
     completedAt: base.completedAt,
     graphData: graphData ? toGraphData(graphData) : base.graphData,
@@ -519,6 +493,5 @@ export function backendListItemToMeeting(item: BackendMeetingListItem): Meeting 
     actionItems: [],
     transcript: [],
     contradictions: [],
-    audioFileName: item.audio_filename ?? undefined,
   };
 }

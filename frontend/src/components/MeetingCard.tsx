@@ -69,17 +69,12 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
               <span className="truncate">{meeting.audioFileName}</span>
               {meeting.fileSize && <span className="text-slate-400">({meeting.fileSize})</span>}
             </p>
-          ) : meeting.status !== 'Completed' ? (
-            // A completed meeting has finished processing regardless of
-            // whether a source filename is on record -- showing this here
-            // read as "still waiting on audio, not done yet" for meetings
-            // that were, in fact, done. Reserve the warning for meetings
-            // genuinely still short a recording.
+          ) : (
             <p className="text-xs text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1 mt-1">
               <UploadCloud className="w-3.5 h-3.5 shrink-0" />
               <span>Awaiting Audio Recording</span>
             </p>
-          ) : null}
+          )}
         </div>
 
         {/* Metadata */}

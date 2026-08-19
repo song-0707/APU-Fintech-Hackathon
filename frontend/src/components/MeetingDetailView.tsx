@@ -114,9 +114,9 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
 
   if (!currentMeeting) {
     return (
-      <div className="p-12 text-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-2">
-        <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">No meeting selected</p>
-        <p className="text-xs text-slate-500 dark:text-slate-400">Select a completed meeting from the sidebar or dashboard.</p>
+      <div className="p-12 text-center bg-white border border-slate-200 rounded-2xl shadow-sm space-y-2">
+        <p className="text-sm font-semibold text-slate-700">No meeting selected</p>
+        <p className="text-xs text-slate-500">Select a completed meeting from the sidebar or dashboard.</p>
       </div>
     );
   }
@@ -144,13 +144,13 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
   return (
     <div className="space-y-6 animate-fade-in pb-12">
       {/* Top Breadcrumb & Meeting Info Header */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm space-y-4">
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             {onBackToDashboard && (
               <button
                 onClick={onBackToDashboard}
-                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 transition-colors"
+                className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors"
                 title="Back to Dashboard"
               >
                 <ArrowLeft className="w-4 h-4" />
@@ -201,10 +201,10 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
         </div>
 
         <div>
-          <h1 className="text-2xl font-extrabold text-slate-900 dark:text-white font-sans tracking-tight">
+          <h1 className="text-2xl font-extrabold text-slate-900 font-sans tracking-tight">
             {currentMeeting.title}
           </h1>
-          <div className="flex flex-wrap items-center gap-5 text-xs text-slate-500 dark:text-slate-400 mt-2">
+          <div className="flex flex-wrap items-center gap-5 text-xs text-slate-500 mt-2">
             <span className="flex items-center gap-1.5">
               <Calendar className="w-4 h-4 text-slate-400" />
               {currentMeeting.dateTime}
@@ -221,11 +221,11 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
         </div>
 
         {/* Executive Summary Callout */}
-        <div className="p-4 rounded-xl bg-blue-50/60 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/60 flex items-start gap-3">
-          <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+        <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-100 flex items-start gap-3">
+          <Sparkles className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <h4 className="text-xs font-bold text-blue-900 dark:text-blue-300 uppercase tracking-wider">Executive Summary</h4>
-            <p className="text-xs md:text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+            <h4 className="text-xs font-bold text-blue-900 uppercase tracking-wider">Executive Summary</h4>
+            <p className="text-xs md:text-sm text-slate-700 leading-relaxed">
               {currentMeeting.summary || 'Strategic architectural and operational decisions extracted automatically by AI graph pipeline.'}
             </p>
           </div>
@@ -233,19 +233,19 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
       </div>
 
       {/* Main Tabbed Navigation Bar */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-1.5 shadow-sm flex flex-wrap items-center gap-2">
+      <div className="bg-white border border-slate-200 rounded-2xl p-1.5 shadow-sm flex flex-wrap items-center gap-2">
         <button
           onClick={() => setActiveTab('decisions')}
           className={`flex-1 min-w-[140px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
             activeTab === 'decisions'
               ? 'bg-blue-600 text-white shadow-sm'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
           }`}
         >
           <Sparkles className="w-4 h-4" />
           <span>Decisions Made</span>
           <span className={`px-2 py-0.5 rounded-full text-xs font-bold font-mono ${
-            activeTab === 'decisions' ? 'bg-blue-700 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+            activeTab === 'decisions' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-700'
           }`}>
             {currentMeeting.decisions?.length || 0}
           </span>
@@ -256,13 +256,13 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
           className={`flex-1 min-w-[140px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
             activeTab === 'actionItems'
               ? 'bg-blue-600 text-white shadow-sm'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
           }`}
         >
           <CheckSquare className="w-4 h-4" />
           <span>Action Items</span>
           <span className={`px-2 py-0.5 rounded-full text-xs font-bold font-mono ${
-            activeTab === 'actionItems' ? 'bg-blue-700 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+            activeTab === 'actionItems' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-700'
           }`}>
             {actionItemsState.length}
           </span>
@@ -273,7 +273,7 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
           className={`flex-1 min-w-[140px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
             activeTab === 'transcript'
               ? 'bg-blue-600 text-white shadow-sm'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
           }`}
         >
           <FileText className="w-4 h-4" />
@@ -285,7 +285,7 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
           className={`flex-1 min-w-[140px] py-2.5 px-4 rounded-xl text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
             activeTab === 'graph'
               ? 'bg-blue-600 text-white shadow-sm'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
           }`}
         >
           <BrainCircuit className="w-4 h-4" />
@@ -297,51 +297,51 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
       {activeTab === 'decisions' && (
         <div className="space-y-4 animate-fade-in">
           <div className="flex items-center justify-between">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" /> What Decisions Were Made
+            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-blue-600" /> What Decisions Were Made
             </h3>
-            <span className="text-xs text-slate-500 dark:text-slate-400">AI-extracted with confidence scoring</span>
+            <span className="text-xs text-slate-500">AI-extracted with confidence scoring</span>
           </div>
 
           <div className="grid grid-cols-1 gap-4">
             {currentMeeting.decisions && currentMeeting.decisions.length > 0 ? (
               currentMeeting.decisions.map((decision) => (
-                <div
-                  key={decision.id}
-                  className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm hover:border-blue-300 dark:hover:border-blue-700 transition-all space-y-4"
+                <div 
+                  key={decision.id} 
+                  className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:border-blue-300 transition-all space-y-4"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="space-y-1">
                       {decision.category && (
-                        <span className="px-2.5 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 text-xs font-semibold border border-blue-100 dark:border-blue-900">
+                        <span className="px-2.5 py-0.5 rounded-md bg-blue-50 text-blue-700 text-xs font-semibold border border-blue-100">
                           {decision.category}
                         </span>
                       )}
-                      <h4 className="text-base font-bold text-slate-900 dark:text-white mt-1">{decision.title}</h4>
+                      <h4 className="text-base font-bold text-slate-900 mt-1">{decision.title}</h4>
                     </div>
 
                     {/* Confidence Score Badge */}
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-bold shrink-0">
-                      <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold shrink-0">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
                       <span>{decision.confidenceScore}% AI Confidence</span>
                     </span>
                   </div>
 
                   {/* Rationale */}
-                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 space-y-1">
-                    <div className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+                    <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">
                       Reason / Rationale
                     </div>
-                    <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-300">{decision.rationale}</p>
+                    <p className="text-xs sm:text-sm text-slate-700">{decision.rationale}</p>
                   </div>
 
                   {/* Supporting Evidence */}
                   {decision.evidence && (
-                    <div className="p-3.5 rounded-xl bg-amber-50/50 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-900/50 space-y-1">
-                      <div className="text-xs font-bold text-amber-900 dark:text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
-                        <FileText className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" /> Supporting Transcript Evidence
+                    <div className="p-3.5 rounded-xl bg-amber-50/50 border border-amber-200/70 space-y-1">
+                      <div className="text-xs font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5 text-amber-600" /> Supporting Transcript Evidence
                       </div>
-                      <blockquote className="text-xs sm:text-sm italic text-amber-950 dark:text-amber-200 font-serif">
+                      <blockquote className="text-xs sm:text-sm italic text-amber-950 font-serif">
                         {decision.evidence}
                       </blockquote>
                     </div>
@@ -349,10 +349,10 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
                 </div>
               ))
             ) : (
-              <div className="p-12 text-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-2">
+              <div className="p-12 text-center bg-white border border-slate-200 rounded-2xl shadow-sm space-y-2">
                 <Sparkles className="w-8 h-8 text-slate-400 mx-auto" />
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">No decisions recorded</p>
-                <p className="text-xs text-slate-500 dark:text-slate-400">No decisions were extracted for this meeting.</p>
+                <p className="text-sm font-semibold text-slate-700">No decisions recorded</p>
+                <p className="text-xs text-slate-500">No decisions were extracted for this meeting.</p>
               </div>
             )}
           </div>
@@ -375,7 +375,7 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
       {/* SUB-VIEW 3: TRANSCRIPT SECTION */}
       {activeTab === 'transcript' && (
         <div className="space-y-4 animate-fade-in">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex items-center justify-between gap-4">
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-between gap-4">
             <div className="relative w-full max-w-md">
               <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
               <input
@@ -383,32 +383,32 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
                 placeholder="Search speaker or keyword in transcript..."
                 value={transcriptSearch}
                 onChange={(e) => setTranscriptSearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white text-sm focus:outline-none focus:border-blue-600 dark:focus:border-blue-500"
+                className="w-full pl-10 pr-4 py-2 rounded-xl bg-white border border-slate-300 text-slate-900 text-sm focus:outline-none focus:border-blue-600"
               />
             </div>
-            <div className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+            <div className="text-xs text-slate-500 font-medium">
               Showing {filteredTranscript.length} segments
             </div>
           </div>
 
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3 max-h-[500px] overflow-y-auto">
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3 max-h-[500px] overflow-y-auto">
             {filteredTranscript.length > 0 ? (
               filteredTranscript.map((t) => (
-                <div
-                  key={t.id}
-                  className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all space-y-2"
+                <div 
+                  key={t.id} 
+                  className="p-4 rounded-xl bg-slate-50 border border-slate-200 hover:border-slate-300 transition-all space-y-2"
                 >
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-blue-700 dark:text-blue-400 flex items-center gap-1.5">
+                    <span className="font-bold text-blue-700 flex items-center gap-1.5">
                       <User className="w-3.5 h-3.5 text-slate-400" /> {t.speaker}
                     </span>
-                    <span className="text-slate-500 dark:text-slate-400 font-mono">[{t.time}]</span>
+                    <span className="text-slate-500 font-mono">[{t.time}]</span>
                   </div>
-                  <p className="text-xs sm:text-sm text-slate-800 dark:text-slate-200 leading-relaxed font-sans">{t.text}</p>
+                  <p className="text-xs sm:text-sm text-slate-800 leading-relaxed font-sans">{t.text}</p>
                 </div>
               ))
             ) : (
-              <div className="text-center py-12 text-slate-500 dark:text-slate-400 text-sm">
+              <div className="text-center py-12 text-slate-500 text-sm">
                 No transcript segments found matching "{transcriptSearch}".
               </div>
             )}
@@ -420,10 +420,10 @@ export const MeetingDetailView: React.FC<MeetingDetailViewProps> = ({
       {activeTab === 'graph' && (
         <div className="space-y-4 animate-fade-in">
           <div className="flex items-center justify-between">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <BrainCircuit className="w-5 h-5 text-blue-600 dark:text-blue-400" /> Knowledge Graph (Persons, Decisions, Actions & Risks)
+            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <BrainCircuit className="w-5 h-5 text-blue-600" /> Knowledge Graph (Persons, Decisions, Actions & Risks)
             </h3>
-            <span className="text-xs text-slate-500 dark:text-slate-400">Powered by react-force-graph-2d</span>
+            <span className="text-xs text-slate-500">Powered by react-force-graph-2d</span>
           </div>
 
           <DecisionGraph data={meetingGraphData} currentMeetingId={currentMeeting.id} onSendDirectMessage={onSendDirectMessage} />
