@@ -5,6 +5,7 @@ class MeetingCreate(BaseModel):
     title: str
     project: str | None = None
     date: str | None = None
+    participant_names: list[str] = []
 
 
 class MeetingCreateResponse(BaseModel):
@@ -29,3 +30,6 @@ class MeetingListItem(BaseModel):
     action_items_count: int = 0
     flags_count: int = 0
     audio_filename: str | None = None
+    source: str | None = None
+    room_id: str | None = None
+    rsvp_status: str | None = None

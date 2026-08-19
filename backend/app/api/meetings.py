@@ -1,9 +1,11 @@
 import json
+import secrets
 from pathlib import Path
 
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_employee, require_meeting_access
@@ -11,7 +13,7 @@ from app.core.logger import get_logger
 from app.database.session import get_db
 from app.graph import graph_builder
 from app.models.employee import Employee, MeetingParticipant
-from app.models.meeting import Meeting, ProcessingTask
+from app.models.meeting import Meeting, MeetingInvite, ProcessingTask
 from app.schemas.meeting import (
     MeetingCreate,
     MeetingCreateResponse,
@@ -29,14 +31,51 @@ storage = StorageService()
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".mp4"}
 
 
-@router.post("/meetings", response_model=MeetingCreateResponse)
-def create_meeting(payload: MeetingCreate, db: Session = Depends(get_db)) -> MeetingCreateResponse:
-    meeting = Meeting(title=payload.title, project=payload.project, date=payload.date)
+def _generate_room_code(db: Session, attempts: int = 5) -> str:
+    for _ in range(attempts):
+        code = f"CORP-{secrets.token_hex(2).upper()}"
+        if not db.query(Meeting).filter_by(room_id=code).first():
+            return code
+    raise HTTPException(status_code=503, detail="Could not generate a unique room code, please retry")
+
+
+@router.post("/meetings", response_model=MeetingListItem)
+def create_meeting(
+    payload: MeetingCreate,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> MeetingListItem:
+    original_by_lower = {n.strip().lower(): n.strip() for n in payload.participant_names if n.strip()}
+    invitee_names = set(original_by_lower) - {caller.name.lower()}
+    invitees = []
+    if invitee_names:
+        invitees = db.query(Employee).filter(func.lower(Employee.name).in_(invitee_names)).all()
+        missing = invitee_names - {e.name.lower() for e in invitees}
+        if missing:
+            missing_original = sorted(original_by_lower[name] for name in missing)
+            raise HTTPException(status_code=400, detail=f"Unknown participant(s): {missing_original}")
+
+    room_id = _generate_room_code(db)
+    meeting = Meeting(
+        title=payload.title, project=payload.project, date=payload.date,
+        source="scheduled", room_id=room_id, status="scheduled",
+    )
     db.add(meeting)
+    db.flush()
+
+    db.add(MeetingInvite(meeting_id=meeting.id, employee_id=caller.id, rsvp_status="accepted"))
+    for employee in invitees:
+        db.add(MeetingInvite(meeting_id=meeting.id, employee_id=employee.id, rsvp_status="pending"))
+
     db.commit()
     db.refresh(meeting)
-    logger.info(f"Meeting {meeting.id} created")
-    return MeetingCreateResponse(meeting_id=meeting.id)
+    logger.info(f"Meeting {meeting.id} scheduled by {caller.name} with {len(invitees)} invitee(s)")
+
+    return MeetingListItem(
+        id=meeting.id, title=meeting.title, project=meeting.project, date=meeting.date,
+        status=meeting.status, progress=0, source=meeting.source, room_id=meeting.room_id,
+        rsvp_status="accepted",
+    )
 
 
 @router.post("/upload", response_model=MeetingCreateResponse, status_code=202)
