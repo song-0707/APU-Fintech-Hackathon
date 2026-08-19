@@ -26,6 +26,7 @@ export interface BackendMeetingListItem {
   source: string | null;
   room_id: string | null;
   rsvp_status: string | null;
+  participant_names: string[];
 }
 
 interface BackendDecision {
@@ -528,7 +529,12 @@ export function mergeBackendIntoMeeting(
     dateTime: base.dateTime || item.date || new Date().toISOString(),
     timeRange: base.timeRange,
     department: base.department,
-    participants: summary?.participants || base.participants || [],
+    // AI-extracted participants (post-processing) take priority once they
+    // exist -- they reflect who actually spoke, which can differ from who
+    // was invited. Before that, item.participant_names (who was invited,
+    // from MeetingInvite) is the only real data available for a scheduled
+    // meeting; InvitationCard has nothing else to show as attendees.
+    participants: summary?.participants || item.participant_names || base.participants || [],
     status: mapBackendStatus(item.status, item.progress),
     duration: summary?.duration || base.duration,
     summary: summary?.summary || base.summary,

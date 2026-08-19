@@ -23,6 +23,7 @@ def test_pending_invite_makes_unprocessed_meeting_visible_to_invitee_only(client
     assert item["source"] == "scheduled"
     assert item["room_id"] == "CORP-LM01"
     assert item["rsvp_status"] == "pending"
+    assert item["participant_names"] == ["List Invitee"]
 
 
 def test_declined_invite_excludes_meeting_from_list(client, db_session):

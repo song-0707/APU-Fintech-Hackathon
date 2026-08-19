@@ -35,6 +35,7 @@ class MeetingListItem(BaseModel):
     source: str | None = None
     room_id: str | None = None
     rsvp_status: str | None = None
+    participant_names: list[str] = []
 
 
 class RsvpRequest(BaseModel):

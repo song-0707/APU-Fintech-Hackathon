@@ -931,6 +931,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             source: 'upload',
             room_id: null,
             rsvp_status: null,
+            participant_names: [],
           };
 
           if (taskStatus.status === 'completed') {

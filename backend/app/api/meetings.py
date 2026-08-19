@@ -76,6 +76,7 @@ def create_meeting(
         id=meeting.id, title=meeting.title, project=meeting.project, date=meeting.date,
         status=meeting.status, progress=0, source=meeting.source, room_id=meeting.room_id,
         rsvp_status="accepted",
+        participant_names=[caller.name] + [e.name for e in invitees],
     )
 
 
@@ -213,6 +214,18 @@ def list_meetings(
         for inv in db.query(MeetingInvite).filter_by(employee_id=caller.id)
     }
 
+    # Every invitee's name, per meeting -- not scoped to the caller like
+    # invite_status_by_meeting above, since a card needs to show who ELSE
+    # was invited, not just the caller's own status. One join query for
+    # every meeting this request will consider, not one query per meeting.
+    participant_names_by_meeting: dict[str, list[str]] = {}
+    for invite, employee_name in (
+        db.query(MeetingInvite, Employee.name)
+        .join(Employee, Employee.id == MeetingInvite.employee_id)
+        .all()
+    ):
+        participant_names_by_meeting.setdefault(invite.meeting_id, []).append(employee_name)
+
     accessible_ids: set[str] | None = None
     if not caller.is_management:
         accessible_ids = {
@@ -257,6 +270,7 @@ def list_meetings(
             source=meeting.source,
             room_id=meeting.room_id,
             rsvp_status=invite_status_by_meeting.get(meeting.id),
+            participant_names=participant_names_by_meeting.get(meeting.id, []),
         ))
     return items
 

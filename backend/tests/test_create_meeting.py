@@ -20,6 +20,7 @@ def test_create_meeting_auto_accepts_organizer_and_invites_others(client, db_ses
     assert body["status"] == "scheduled"
     assert body["rsvp_status"] == "accepted"
     assert body["room_id"].startswith("CORP-")
+    assert set(body["participant_names"]) == {"Owner Test", "Invitee Test"}
 
     invites = db_session.query(MeetingInvite).filter_by(meeting_id=body["id"]).all()
     by_employee = {inv.employee_id: inv.rsvp_status for inv in invites}
