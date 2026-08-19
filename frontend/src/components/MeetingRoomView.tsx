@@ -45,17 +45,18 @@ const apiHost = frontendHost === '::1' || frontendHost === '[::1]'
   : frontendHost;
 const apiBaseUrl = import.meta.env.VITE_API_URL
   ?? `${window.location.protocol}//${apiHost}:8000`;
+const normalizedApiBaseUrl = apiBaseUrl.replace(/\/$/, '');
 
 async function getJoinDetails(roomName: string, displayName: string): Promise<JoinDetails> {
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl}/livekit/token`, {
+    response = await fetch(`${normalizedApiBaseUrl}/livekit/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ room_name: roomName, display_name: displayName }),
     });
   } catch {
-    throw new Error(`Cannot reach the meeting server at ${apiBaseUrl}. Start FastAPI on port 8000, then try again.`);
+    throw new Error(`Cannot reach the meeting server at ${normalizedApiBaseUrl}. Start FastAPI on port 8000, then try again.`);
   }
 
   let payload: { token?: string; server_url?: string; detail?: string } = {};
