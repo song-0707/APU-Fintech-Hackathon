@@ -61,7 +61,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
         {/* Title */}
         <div>
           <h3 className="text-base font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors line-clamp-1">
-            {meeting.title}
+            {meeting.source === 'live' && meeting.roomId ? `Room ${meeting.roomId}` : meeting.title}
           </h3>
           {meeting.audioFileName ? (
             <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mt-1">

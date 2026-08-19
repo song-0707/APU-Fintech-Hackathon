@@ -1,9 +1,11 @@
 import json
+import secrets
 from pathlib import Path
 
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_employee, require_meeting_access
@@ -11,12 +13,13 @@ from app.core.logger import get_logger
 from app.database.session import get_db
 from app.graph import graph_builder
 from app.models.employee import Employee, MeetingParticipant
-from app.models.meeting import Meeting, ProcessingTask
+from app.models.meeting import Meeting, MeetingInvite, ProcessingTask
 from app.schemas.meeting import (
     MeetingCreate,
     MeetingCreateResponse,
     MeetingListItem,
     MeetingStatusResponse,
+    RsvpRequest,
 )
 from app.services import embedding_service
 from app.services.storage_service import StorageService
@@ -29,14 +32,67 @@ storage = StorageService()
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".mp4"}
 
 
-@router.post("/meetings", response_model=MeetingCreateResponse)
-def create_meeting(payload: MeetingCreate, db: Session = Depends(get_db)) -> MeetingCreateResponse:
-    meeting = Meeting(title=payload.title, project=payload.project, date=payload.date)
+def _generate_room_code(db: Session, attempts: int = 5) -> str:
+    for _ in range(attempts):
+        code = f"CORP-{secrets.token_hex(2).upper()}"
+        if not db.query(Meeting).filter_by(room_id=code).first():
+            return code
+    raise HTTPException(status_code=503, detail="Could not generate a unique room code, please retry")
+
+
+@router.post("/meetings", response_model=MeetingListItem)
+def create_meeting(
+    payload: MeetingCreate,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> MeetingListItem:
+    original_by_lower = {n.strip().lower(): n.strip() for n in payload.participant_names if n.strip()}
+    invitee_names = set(original_by_lower) - {caller.name.lower()}
+    invitees = []
+    if invitee_names:
+        invitees = db.query(Employee).filter(func.lower(Employee.name).in_(invitee_names)).all()
+        missing = invitee_names - {e.name.lower() for e in invitees}
+        if missing:
+            missing_original = sorted(original_by_lower[name] for name in missing)
+            raise HTTPException(status_code=400, detail=f"Unknown participant(s): {missing_original}")
+
+    room_id = _generate_room_code(db)
+    meeting = Meeting(
+        title=payload.title, project=payload.project, date=payload.date,
+        source="scheduled", room_id=room_id, status="scheduled",
+    )
     db.add(meeting)
+    db.flush()
+
+    db.add(MeetingInvite(meeting_id=meeting.id, employee_id=caller.id, rsvp_status="accepted"))
+    for employee in invitees:
+        db.add(MeetingInvite(meeting_id=meeting.id, employee_id=employee.id, rsvp_status="pending"))
+
     db.commit()
     db.refresh(meeting)
-    logger.info(f"Meeting {meeting.id} created")
-    return MeetingCreateResponse(meeting_id=meeting.id)
+    logger.info(f"Meeting {meeting.id} scheduled by {caller.name} with {len(invitees)} invitee(s)")
+
+    return MeetingListItem(
+        id=meeting.id, title=meeting.title, project=meeting.project, date=meeting.date,
+        status=meeting.status, progress=0, source=meeting.source, room_id=meeting.room_id,
+        rsvp_status="accepted",
+        participant_names=[caller.name] + [e.name for e in invitees],
+    )
+
+
+@router.post("/meetings/{meeting_id}/rsvp", status_code=204)
+def set_rsvp(
+    meeting_id: str,
+    payload: RsvpRequest,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> Response:
+    invite = db.query(MeetingInvite).filter_by(meeting_id=meeting_id, employee_id=caller.id).first()
+    if invite is None:
+        raise HTTPException(status_code=404, detail="No invitation found for this meeting")
+    invite.rsvp_status = payload.status
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.post("/upload", response_model=MeetingCreateResponse, status_code=202)
@@ -51,7 +107,7 @@ async def upload_meeting(
         raise HTTPException(status_code=415, detail=f"Unsupported file type: {ext or '(none)'}")
 
     meeting_title = title or Path(file.filename).stem
-    meeting = Meeting(title=meeting_title, project=project, status="queued")
+    meeting = Meeting(title=meeting_title, project=project, status="queued", source="upload")
     db.add(meeting)
     db.commit()
     db.refresh(meeting)
@@ -148,16 +204,46 @@ def list_meetings(
     # filter *within* that set — it used to be the only scoping this
     # endpoint had, which is exactly what let a direct API call see
     # everything by just omitting it.
+    #
+    # invite_status_by_meeting is looked up for every caller, management
+    # included — a management caller's broad visibility is about seeing
+    # meetings they weren't personally invited to, not about overriding
+    # their own accept/decline choice on ones they were. Every demo
+    # employee in this app is management-flagged, so this branch is the
+    # common path, not an edge case.
+    invite_status_by_meeting: dict[str, str] = {
+        inv.meeting_id: inv.rsvp_status
+        for inv in db.query(MeetingInvite).filter_by(employee_id=caller.id)
+    }
+
+    # Every invitee's name, per meeting -- not scoped to the caller like
+    # invite_status_by_meeting above, since a card needs to show who ELSE
+    # was invited, not just the caller's own status. One join query for
+    # every meeting this request will consider, not one query per meeting.
+    participant_names_by_meeting: dict[str, list[str]] = {}
+    for invite, employee_name in (
+        db.query(MeetingInvite, Employee.name)
+        .join(Employee, Employee.id == MeetingInvite.employee_id)
+        .all()
+    ):
+        participant_names_by_meeting.setdefault(invite.meeting_id, []).append(employee_name)
+
     accessible_ids: set[str] | None = None
     if not caller.is_management:
         accessible_ids = {
             mp.meeting_id
             for mp in db.query(MeetingParticipant).filter_by(employee_id=caller.id)
         }
+        accessible_ids |= {
+            meeting_id for meeting_id, status in invite_status_by_meeting.items()
+            if status != "declined"
+        }
 
     items: list[MeetingListItem] = []
     for meeting in query.order_by(Meeting.created_at.desc()).all():
         if accessible_ids is not None and meeting.id not in accessible_ids:
+            continue
+        if invite_status_by_meeting.get(meeting.id) == "declined":
             continue
 
         summary = _load_json(f"summaries/{meeting.id}.json")
@@ -176,6 +262,17 @@ def list_meetings(
             decisions_count=len(summary.get("decisions", [])) if summary else 0,
             action_items_count=len(summary.get("action_items", [])) if summary else 0,
             flags_count=len(summary.get("flags", [])) if summary else 0,
+            # file_path is the storage-relative path (e.g. "raw/<id>/foo.mp4"),
+            # set only by the upload endpoint above -- meetings created via
+            # POST /meetings (schedule-now-upload-later) or without ever
+            # going through a file upload genuinely have none, and that's
+            # real: no source recording exists for them, not just "not
+            # loaded yet".
+            audio_filename=Path(meeting.file_path).name if meeting.file_path else None,
+            source=meeting.source,
+            room_id=meeting.room_id,
+            rsvp_status=invite_status_by_meeting.get(meeting.id),
+            participant_names=participant_names_by_meeting.get(meeting.id, []),
         ))
     return items
 

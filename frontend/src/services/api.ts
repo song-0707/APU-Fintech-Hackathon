@@ -22,6 +22,11 @@ export interface BackendMeetingListItem {
   decisions_count: number;
   action_items_count: number;
   flags_count: number;
+  audio_filename: string | null;
+  source: string | null;
+  room_id: string | null;
+  rsvp_status: string | null;
+  participant_names: string[];
 }
 
 interface BackendDecision {
@@ -160,13 +165,28 @@ async function apiGet<T>(path: string): Promise<T> {
   return res.json();
 }
 
+/** For per-meeting endpoints (summary/transcript/graph-data) that signal
+ * "not processed yet" with a 202 status rather than a 4xx/5xx — that's
+ * HTTP-successful (res.ok is true for any 2xx), so treating it like any
+ * other apiGet call would hand callers a `{detail: "..."}` body shaped
+ * nothing like the real payload. A scheduled-but-unprocessed meeting hits
+ * this on every one of these three endpoints, which GET /meetings started
+ * legitimately returning once invited-but-unprocessed meetings became
+ * visible — not an edge case once that's true. */
+async function apiGetOrNullIfNotReady<T>(path: string): Promise<T | null> {
+  const res = await fetch(`${API_BASE}${path}`, { headers: identityHeaders() });
+  if (res.status === 202) return null;
+  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  return res.json();
+}
+
 export async function listMeetings(): Promise<BackendMeetingListItem[]> {
   return apiGet('/meetings');
 }
 
 export async function getMeetingSummary(meetingId: string): Promise<BackendSummary | null> {
   try {
-    return await apiGet(`/meeting/${meetingId}/summary`);
+    return await apiGetOrNullIfNotReady(`/meeting/${meetingId}/summary`);
   } catch {
     return null;
   }
@@ -174,7 +194,7 @@ export async function getMeetingSummary(meetingId: string): Promise<BackendSumma
 
 export async function getMeetingTranscript(meetingId: string): Promise<BackendTranscript | null> {
   try {
-    return await apiGet(`/meeting/${meetingId}/transcript`);
+    return await apiGetOrNullIfNotReady(`/meeting/${meetingId}/transcript`);
   } catch {
     return null;
   }
@@ -182,7 +202,7 @@ export async function getMeetingTranscript(meetingId: string): Promise<BackendTr
 
 export async function getGraphData(meetingId: string): Promise<BackendGraphData | null> {
   try {
-    return await apiGet(`/meeting/${meetingId}/graph-data`);
+    return await apiGetOrNullIfNotReady(`/meeting/${meetingId}/graph-data`);
   } catch {
     return null;
   }
@@ -223,6 +243,30 @@ export async function uploadMeeting(
 export async function deleteMeeting(meetingId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/meeting/${meetingId}`, { method: 'DELETE', headers: identityHeaders() });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+}
+
+export async function scheduleMeeting(
+  title: string,
+  project: string | undefined,
+  date: string,
+  participantNames: string[]
+): Promise<BackendMeetingListItem> {
+  const res = await fetch(`${API_BASE}/meetings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...identityHeaders() },
+    body: JSON.stringify({ title, project, date, participant_names: participantNames }),
+  });
+  if (!res.ok) throw new Error(`Schedule meeting failed: ${res.status}`);
+  return res.json();
+}
+
+export async function rsvpToMeeting(meetingId: string, status: 'accepted' | 'declined'): Promise<void> {
+  const res = await fetch(`${API_BASE}/meetings/${encodeURIComponent(meetingId)}/rsvp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...identityHeaders() },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) throw new Error(`RSVP failed: ${res.status}`);
 }
 
 /** Sets (or, with displayName=null, clears) a graph node's display-only
@@ -304,6 +348,7 @@ const STATUS_MAP: Record<string, ProcessingStatus> = {
   completed: 'Completed',
   failed: 'Failed',
   retrying: 'Retrying',
+  scheduled: 'Scheduled',
 };
 
 export function mapBackendStatus(status: string, progress: number): ProcessingStatus {
@@ -466,7 +511,12 @@ export function mergeBackendIntoMeeting(
     dateTime: base.dateTime || item.date || new Date().toISOString(),
     timeRange: base.timeRange,
     department: base.department,
-    participants: summary?.participants || base.participants || [],
+    // AI-extracted participants (post-processing) take priority once they
+    // exist -- they reflect who actually spoke, which can differ from who
+    // was invited. Before that, item.participant_names (who was invited,
+    // from MeetingInvite) is the only real data available for a scheduled
+    // meeting; InvitationCard has nothing else to show as attendees.
+    participants: summary?.participants || item.participant_names || base.participants || [],
     status: mapBackendStatus(item.status, item.progress),
     duration: summary?.duration || base.duration,
     summary: summary?.summary || base.summary,
@@ -478,6 +528,9 @@ export function mergeBackendIntoMeeting(
     fileSize: base.fileSize,
     completedAt: base.completedAt,
     graphData: graphData ? toGraphData(graphData) : base.graphData,
+    source: (item.source as Meeting['source']) ?? base.source,
+    roomId: item.room_id ?? base.roomId,
+    rsvpStatus: (item.rsvp_status as Meeting['rsvpStatus']) ?? base.rsvpStatus,
   };
 }
 

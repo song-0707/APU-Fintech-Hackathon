@@ -490,7 +490,10 @@ interface AppContextType {
     endTime: string;
     department: string;
     participantIds: string[];
-  }) => void;
+  }) => Promise<void>;
+  rsvpToMeeting: (meetingId: string, status: 'accepted' | 'declined') => Promise<void>;
+  pendingRoomJoin: { roomName: string; displayName: string } | null;
+  setPendingRoomJoin: (value: { roomName: string; displayName: string } | null) => void;
 
   notifications: Notification[];
   unreadCount: number;
@@ -670,58 +673,78 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // and merge them ahead of the bundled mock data. If the backend isn't
   // running (e.g. frontend-only dev work, or Task 9.2's live-processing
   // fallback), this silently no-ops and the app keeps working on mock data.
+  const fetchMeetingsFromBackend = async (): Promise<Meeting[]> => {
+    const items = await api.listMeetings();
+    if (items.length === 0) return [];
+
+    // Promise.all rejects (and discards every already-fetched meeting)
+    // the moment a single item throws — one meeting with an unexpected
+    // real-mode extraction shape used to silently blank out the entire
+    // list, including previously-working ones. allSettled means one bad
+    // meeting is skipped (and logged) instead of taking the rest down.
+    const results = await Promise.allSettled(
+      items.map(async (item) => {
+        const [summary, transcript, graphData] = await Promise.all([
+          api.getMeetingSummary(item.id),
+          api.getMeetingTranscript(item.id),
+          api.getGraphData(item.id),
+        ]);
+        return api.mergeBackendIntoMeeting(
+          { id: item.id, title: item.title, project: item.project || 'Unassigned' },
+          item,
+          summary,
+          transcript,
+          graphData
+        );
+      })
+    );
+
+    const loaded: Meeting[] = [];
+    results.forEach((result, i) => {
+      if (result.status === 'fulfilled') {
+        loaded.push(result.value);
+      } else {
+        console.error(`[Corporate Brain] Failed to load meeting ${items[i].id} ("${items[i].title}"):`, result.reason);
+      }
+    });
+    return loaded;
+  };
+
+  const refreshMeetings = async () => {
+    // No `loaded.length > 0` guard: a genuinely unreachable backend already
+    // throws inside fetchMeetingsFromBackend (api.listMeetings() rejects),
+    // which propagates to this function's own caller instead of resolving
+    // here -- so by the time this line runs, `loaded` is a real, current
+    // answer from a reachable backend, and an empty array is legitimate
+    // (e.g. this user just declined their only invite). Skipping the
+    // update on `loaded.length === 0` left exactly that case stuck showing
+    // a stale, already-declined meeting forever.
+    const loaded = await fetchMeetingsFromBackend();
+    // Replace every previously-loaded real-backend meeting with this fresh
+    // set (not just de-dupe by id) -- otherwise switching demo users via
+    // switchDemoUser() would leave the PREVIOUS user's backend-scoped
+    // meetings sitting in state alongside the new user's, since real
+    // backend ids rarely collide across users. Bundled `mtg-...` demo/mock
+    // meetings are untouched -- they aren't user-scoped and aren't
+    // something this fetch manages.
+    setMeetings((prev) => [...loaded, ...prev.filter((m) => m.id.startsWith('mtg-'))]);
+  };
+
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
-      try {
-        const items = await api.listMeetings();
-        if (cancelled || items.length === 0) return;
-
-        // Promise.all rejects (and discards every already-fetched meeting)
-        // the moment a single item throws — one meeting with an unexpected
-        // real-mode extraction shape used to silently blank out the entire
-        // list, including previously-working ones. allSettled means one bad
-        // meeting is skipped (and logged) instead of taking the rest down.
-        const results = await Promise.allSettled(
-          items.map(async (item) => {
-            const [summary, transcript, graphData] = await Promise.all([
-              api.getMeetingSummary(item.id),
-              api.getMeetingTranscript(item.id),
-              api.getGraphData(item.id),
-            ]);
-            return api.mergeBackendIntoMeeting(
-              { id: item.id, title: item.title, project: item.project || 'Unassigned' },
-              item,
-              summary,
-              transcript,
-              graphData
-            );
-          })
-        );
-
-        const loaded: Meeting[] = [];
-        results.forEach((result, i) => {
-          if (result.status === 'fulfilled') {
-            loaded.push(result.value);
-          } else {
-            console.error(`[Corporate Brain] Failed to load meeting ${items[i].id} ("${items[i].title}"):`, result.reason);
-          }
-        });
-
-        if (!cancelled && loaded.length > 0) {
-          setMeetings((prev) => [...loaded, ...prev.filter((m) => !loaded.some((l) => l.id === m.id))]);
-        }
-      } catch (e) {
-        console.warn('[Corporate Brain] Backend not reachable, staying on demo data:', e);
-      }
-    })();
+    refreshMeetings().catch((e) => {
+      if (!cancelled) console.warn('[Corporate Brain] Backend not reachable, staying on demo data:', e);
+    });
 
     return () => {
       cancelled = true;
     };
+    // currentUser.name is intentionally the trigger: switching identity
+    // (switchDemoUser) must refetch, since /meetings is scoped server-side
+    // by the X-User-Name header set in the effect above this one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [currentUser.name]);
 
   useEffect(() => {
     let cancelled = false;
@@ -896,6 +919,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             decisions_count: 0,
             action_items_count: 0,
             flags_count: 0,
+            // Not returned by the status-polling endpoint, but this poll
+            // only ever runs for a file this same call just uploaded --
+            // file.name is the real filename the backend just persisted.
+            audio_filename: file.name,
+            // This poll always follows api.uploadMeeting() above, which hits
+            // POST /upload -- the backend tags that Meeting row source='upload'
+            // unconditionally, so mirroring it here (rather than null) keeps
+            // this synthetic list item consistent with what a real GET
+            // /meetings response for the same meeting would show.
+            source: 'upload',
+            room_id: null,
+            rsvp_status: null,
+            participant_names: [],
           };
 
           if (taskStatus.status === 'completed') {
@@ -1068,7 +1104,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 1400);
   };
 
-  const addMeeting = (data: {
+  const addMeeting = async (data: {
     title: string;
     description: string;
     date: string;
@@ -1082,24 +1118,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return emp ? emp.name : id;
     });
 
-    const newMeetingId = `mtg-${Date.now()}`;
-    const newMeeting: Meeting = {
-      id: newMeetingId,
-      title: data.title,
-      project: `${data.department} Sync`,
-      dateTime: `${data.date} ${data.startTime}`,
-      timeRange: `${data.startTime} - ${data.endTime}`,
-      department: data.department,
-      participants: [...participantNames, currentUser.name],
-      status: 'Scheduled',
-      duration: '60 mins',
-      summary: data.description || 'Newly scheduled team meeting.',
-      decisions: [],
-      actionItems: [],
-      transcript: []
-    };
-
-    setMeetings(prev => [newMeeting, ...prev]);
+    try {
+      await api.scheduleMeeting(data.title, `${data.department} Sync`, `${data.date} ${data.startTime}`, participantNames);
+      await refreshMeetings();
+    } catch (e) {
+      console.warn('[Corporate Brain] Failed to schedule meeting on the backend:', e);
+    }
 
     const newNotifications: Notification[] = data.participantIds.map((empId, index) => {
       const emp = employees.find(e => e.id === empId);
@@ -1112,7 +1136,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         read: false,
         category: 'meeting',
         type: 'INVITATION',
-        meetingId: newMeetingId,
+        meetingId: '',
         senderName: currentUser.name,
         recipientName: recipientName,
         targetTab: 'meetings'
@@ -1121,6 +1145,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setNotifications(prev => [...newNotifications, ...prev]);
     setIsCreateMeetingOpen(false);
+  };
+
+  const [pendingRoomJoin, setPendingRoomJoin] = useState<{ roomName: string; displayName: string } | null>(null);
+
+  const rsvpToMeeting = async (meetingId: string, status: 'accepted' | 'declined') => {
+    await api.rsvpToMeeting(meetingId, status);
+    await refreshMeetings();
   };
 
   const [isDmDrawerOpen, setIsDmDrawerOpen] = useState<boolean>(false);
@@ -1257,6 +1288,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         processAudioForMeeting,
         deleteMeeting,
         addMeeting,
+        rsvpToMeeting,
+        pendingRoomJoin,
+        setPendingRoomJoin,
         notifications: userNotifications,
         unreadCount: userUnreadCount,
         markAsRead,

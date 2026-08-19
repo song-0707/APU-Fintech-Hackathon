@@ -132,6 +132,9 @@ export interface Meeting {
   fileSize?: string;
   completedAt?: string;
   graphData?: GraphData;
+  source?: 'scheduled' | 'live' | 'upload';
+  roomId?: string;
+  rsvpStatus?: 'pending' | 'accepted' | 'declined';
 }
 
 export type NotificationCategory = 'meeting' | 'action_item' | 'system' | 'message' | 'contradiction' | 'ai_pipeline';

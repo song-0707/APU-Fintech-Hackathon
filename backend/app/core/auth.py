@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.database.session import get_db
 from app.models.employee import Employee, MeetingParticipant
+from app.models.meeting import MeetingInvite
 
 
 def get_current_employee(
@@ -39,7 +40,10 @@ def require_meeting_access(db: Session, meeting_id: str, caller: Employee) -> No
     """Shared per-meeting check for meetings.py's summary/transcript/
     graph-data/export/delete endpoints and graph.py's per-meeting graph
     data — one lookup against the stable meeting_participants table rather
-    than each endpoint inferring membership its own way."""
+    than each endpoint inferring membership its own way. Also grants access
+    via a non-declined MeetingInvite, so an invitee who accepted a
+    scheduled meeting doesn't lose visibility if they end up outside the
+    AI-extracted participant list once it's processed."""
     if caller.is_management:
         return
     is_participant = (
@@ -48,5 +52,12 @@ def require_meeting_access(db: Session, meeting_id: str, caller: Employee) -> No
         .first()
         is not None
     )
-    if not is_participant:
+    has_invite = (
+        db.query(MeetingInvite)
+        .filter_by(meeting_id=meeting_id, employee_id=caller.id)
+        .filter(MeetingInvite.rsvp_status != "declined")
+        .first()
+        is not None
+    )
+    if not (is_participant or has_invite):
         raise HTTPException(status_code=403, detail=f"Not authorized to view meeting {meeting_id}")
