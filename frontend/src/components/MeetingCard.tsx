@@ -69,12 +69,12 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
               <span className="truncate">{meeting.audioFileName}</span>
               {meeting.fileSize && <span className="text-slate-400">({meeting.fileSize})</span>}
             </p>
-          ) : (
+          ) : !isCompleted ? (
             <p className="text-xs text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1 mt-1">
               <UploadCloud className="w-3.5 h-3.5 shrink-0" />
               <span>Awaiting Audio Recording</span>
             </p>
-          )}
+          ) : null}
         </div>
 
         {/* Metadata */}
