@@ -23,6 +23,9 @@ export interface BackendMeetingListItem {
   action_items_count: number;
   flags_count: number;
   audio_filename: string | null;
+  source: string | null;
+  room_id: string | null;
+  rsvp_status: string | null;
 }
 
 interface BackendDecision {
@@ -226,6 +229,30 @@ export async function deleteMeeting(meetingId: string): Promise<void> {
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
 }
 
+export async function scheduleMeeting(
+  title: string,
+  project: string | undefined,
+  date: string,
+  participantNames: string[]
+): Promise<BackendMeetingListItem> {
+  const res = await fetch(`${API_BASE}/meetings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...identityHeaders() },
+    body: JSON.stringify({ title, project, date, participant_names: participantNames }),
+  });
+  if (!res.ok) throw new Error(`Schedule meeting failed: ${res.status}`);
+  return res.json();
+}
+
+export async function rsvpToMeeting(meetingId: string, status: 'accepted' | 'declined'): Promise<void> {
+  const res = await fetch(`${API_BASE}/meetings/${encodeURIComponent(meetingId)}/rsvp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...identityHeaders() },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) throw new Error(`RSVP failed: ${res.status}`);
+}
+
 /** Sets (or, with displayName=null, clears) a graph node's display-only
  * label override. `identifier` is the node's real id/name — for Person and
  * Project nodes that's the part after the "type:" prefix in a GraphNode's
@@ -323,6 +350,7 @@ const STATUS_MAP: Record<string, ProcessingStatus> = {
   completed: 'Completed',
   failed: 'Failed',
   retrying: 'Retrying',
+  scheduled: 'Scheduled',
 };
 
 export function mapBackendStatus(status: string, progress: number): ProcessingStatus {
@@ -504,6 +532,9 @@ export function mergeBackendIntoMeeting(
     fileSize: base.fileSize,
     completedAt: base.completedAt,
     graphData: graphData ? toGraphData(graphData) : base.graphData,
+    source: (item.source as Meeting['source']) ?? base.source,
+    roomId: item.room_id ?? base.roomId,
+    rsvpStatus: (item.rsvp_status as Meeting['rsvpStatus']) ?? base.rsvpStatus,
   };
 }
 

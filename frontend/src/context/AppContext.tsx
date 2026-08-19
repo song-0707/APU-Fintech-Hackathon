@@ -900,6 +900,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             // only ever runs for a file this same call just uploaded --
             // file.name is the real filename the backend just persisted.
             audio_filename: file.name,
+            // This poll always follows api.uploadMeeting() above, which hits
+            // POST /upload -- the backend tags that Meeting row source='upload'
+            // unconditionally, so mirroring it here (rather than null) keeps
+            // this synthetic list item consistent with what a real GET
+            // /meetings response for the same meeting would show.
+            source: 'upload',
+            room_id: null,
+            rsvp_status: null,
           };
 
           if (taskStatus.status === 'completed') {
