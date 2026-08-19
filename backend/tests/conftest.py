@@ -14,6 +14,13 @@ os.close(_test_db_fd)
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{_test_db_path}")
 
 os.environ.setdefault("GEMINI_API_KEY", "test-key")
+# has_gemini_credentials() (app.services.gemini_client) checks the API key OR
+# these two, and prefers a service account when one is present. The real one
+# configured in backend/.env is a genuinely valid credential, so without this,
+# faking out GEMINI_API_KEY above doesn't stop tests from making real, billable
+# calls to Vertex AI — it just gets skipped in favor of the real service account.
+os.environ.setdefault("GEMINI_SERVICE_ACCOUNT_FILE", "")
+os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", "")
 os.environ.setdefault("NEO4J_PASSWORD", "test-password")
 os.environ.setdefault("DEMO_MODE", "true")
 os.environ.setdefault("DEEPGRAM_API_KEY", "")
