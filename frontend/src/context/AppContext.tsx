@@ -479,6 +479,7 @@ interface AppContextType {
   contradictions: Contradiction[];
   actionItems: ActionItem[];
   personalDashboard: api.BackendDashboard | null;
+  refreshMeetings: () => Promise<void>;
   toggleActionItem: (id: string) => Promise<void>;
   processAudioForMeeting: (meetingId: string, file: File | { name: string; size?: number }) => void;
   deleteMeeting: (meetingId: string) => Promise<void>;
@@ -1303,6 +1304,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         contradictions,
         actionItems,
         personalDashboard,
+        refreshMeetings,
         toggleActionItem,
         processAudioForMeeting,
         deleteMeeting,

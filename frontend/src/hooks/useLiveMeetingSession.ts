@@ -1,8 +1,23 @@
-import { useLocalParticipant, useRoomContext, useTracks } from '@livekit/components-react';
+import { useLocalParticipant, useRoomContext } from '@livekit/components-react';
 import { RoomEvent, Track } from 'livekit-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export type CaptionLine = { id: string; speaker: string; text: string; timestamp: string };
+export type CaptionLine = { id: string; speaker: string; text: string; timestamp: string; start?: number; end?: number };
+export type LiveActionItem = { task: string; assignee: string; deadline?: string; priority?: string };
+export type LiveMinuteSummary = {
+  id: string;
+  room_name: string;
+  minute_index: number;
+  window_start: number;
+  window_end: number;
+  label: string;
+  summary: string;
+  decisions: string[];
+  action_items: LiveActionItem[];
+  risks: string[];
+  segment_count: number;
+  provisional: boolean;
+};
 export type LiveSuggestion = {
   id: string;
   message: string;
@@ -18,6 +33,7 @@ export type LiveMeetingSessionState = {
   captionsError: string;
   toggleCaptions: () => void;
   transcript: CaptionLine[];
+  minuteSummaries: LiveMinuteSummary[];
   suggestions: LiveSuggestion[];
   dismissSuggestion: (id: string) => void;
 };
@@ -39,21 +55,31 @@ const nextLocalId = () => `local-${Date.now()}-${localIdCounter++}`;
 
 export function useLiveMeetingSession(roomName: string, token: string): LiveMeetingSessionState {
   const room = useRoomContext();
-  const { isMicrophoneEnabled } = useLocalParticipant();
-  const microphones = useTracks([Track.Source.Microphone], { onlySubscribed: true });
+  const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
 
   const [connectionError, setConnectionError] = useState('');
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
   const [captionsError, setCaptionsError] = useState('');
   const [transcript, setTranscript] = useState<CaptionLine[]>([]);
+  const [minuteSummaries, setMinuteSummaries] = useState<LiveMinuteSummary[]>([]);
   const [suggestions, setSuggestions] = useState<LiveSuggestion[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
 
-  const publish = useCallback((topic: 'live-transcript' | 'live-suggestion', payload: unknown) => {
+  const publish = useCallback((topic: 'live-transcript' | 'live-suggestion' | 'live-minute-intelligence', payload: unknown) => {
     void room.localParticipant.publishData(encoder.encode(JSON.stringify(payload)), { reliable: true, topic });
   }, [room]);
+
+  const upsertMinuteSummary = useCallback((summary: LiveMinuteSummary) => {
+    setMinuteSummaries((prev) => {
+      const existing = prev.findIndex((item) => item.id === summary.id || item.minute_index === summary.minute_index);
+      if (existing === -1) return [...prev, summary].sort((a, b) => a.minute_index - b.minute_index);
+      const next = [...prev];
+      next[existing] = summary;
+      return next.sort((a, b) => a.minute_index - b.minute_index);
+    });
+  }, []);
 
   // Session WS: opens once on room join, independent of the caption toggle.
   useEffect(() => {
@@ -74,12 +100,21 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
     ws.onopen = () => {
       setConnectionError('');
       ws.send(JSON.stringify({ type: 'auth', token }));
+      ws.send(JSON.stringify({ type: 'captions_on' }));
+      setCaptionsEnabled(true);
     };
 
     ws.onmessage = (event) => {
       const payload = JSON.parse(event.data as string);
       if (payload.type === 'caption') {
-        const line: CaptionLine = { id: nextLocalId(), speaker: payload.speaker, text: payload.text, timestamp: payload.timestamp };
+        const line: CaptionLine = {
+          id: nextLocalId(),
+          speaker: payload.speaker,
+          text: payload.text,
+          timestamp: payload.timestamp,
+          start: payload.start,
+          end: payload.end,
+        };
         setTranscript((prev) => [...prev, line]);
         publish('live-transcript', line);
       } else if (payload.type === 'contradiction_suggestion') {
@@ -93,6 +128,9 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
         };
         setSuggestions((prev) => [...prev, suggestion]);
         publish('live-suggestion', suggestion);
+      } else if (payload.type === 'minute_intelligence' && payload.summary) {
+        upsertMinuteSummary(payload.summary);
+        publish('live-minute-intelligence', payload.summary);
       } else if (payload.type === 'captions_error') {
         setCaptionsError(payload.message);
         setCaptionsEnabled(false);
@@ -106,44 +144,57 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
 
     return () => ws.close();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomName, token]);
+  }, [publish, roomName, token, upsertMinuteSummary]);
 
   // History hydration for a late joiner — the LiveKit data channel has no
   // replay of its own, so this is a one-time backend read on mount.
   useEffect(() => {
     if (!token) return;
-    fetch(`${normalizedApiBaseUrl}/live-meeting/${roomName}/transcript-so-far`, {
+    fetch(`${normalizedApiBaseUrl}/live-meeting/${roomName}/intelligence-so-far`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => (res.ok ? res.json() : { segments: [] }))
-      .then((data: { segments: Array<{ speaker: string; text: string; timestamp: string }> }) => {
+      .then((res) => (res.ok ? res.json() : { segments: [], minute_summaries: [] }))
+      .then((data: {
+        segments: Array<{ speaker: string; text: string; timestamp: string; start?: number; end?: number }>;
+        minute_summaries: LiveMinuteSummary[];
+      }) => {
         setTranscript((prev) => [
-          ...data.segments.map((s) => ({ id: nextLocalId(), speaker: s.speaker, text: s.text, timestamp: s.timestamp })),
+          ...data.segments.map((s) => ({
+            id: nextLocalId(),
+            speaker: s.speaker,
+            text: s.text,
+            timestamp: s.timestamp,
+            start: s.start,
+            end: s.end,
+          })),
           ...prev,
         ]);
+        data.minute_summaries.forEach(upsertMinuteSummary);
       })
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomName, token]);
+  }, [roomName, token, upsertMinuteSummary]);
 
   // Receiving other participants' captions/suggestions via the same
   // LiveKit data-channel pattern CollaborativeWhiteboard.tsx already uses.
   useEffect(() => {
     const handleMessage = (data: Uint8Array, _participant?: unknown, _kind?: unknown, topic?: string) => {
-      if (topic !== 'live-transcript' && topic !== 'live-suggestion') return;
+      if (topic !== 'live-transcript' && topic !== 'live-suggestion' && topic !== 'live-minute-intelligence') return;
       const payload = JSON.parse(decoder.decode(data));
       if (topic === 'live-transcript') {
         setTranscript((prev) => (prev.some((line) => line.id === payload.id) ? prev : [...prev, payload]));
-      } else {
+      } else if (topic === 'live-suggestion') {
         setSuggestions((prev) => (prev.some((s) => s.id === payload.id) ? prev : [...prev, payload]));
+      } else {
+        upsertMinuteSummary(payload);
       }
     };
     room.on(RoomEvent.DataReceived, handleMessage);
     return () => { room.off(RoomEvent.DataReceived, handleMessage); };
-  }, [room]);
+  }, [room, upsertMinuteSummary]);
 
   const stopCapture = useCallback(() => {
-    recorderRef.current?.stop();
+    if (recorderRef.current?.state !== 'inactive') recorderRef.current?.stop();
     recorderRef.current = null;
   }, []);
 
@@ -164,47 +215,40 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
     });
   }, [stopCapture]);
 
-  // useTracks() emits a brand-new array on essentially any room-wide track
-  // event (any participant's mic/camera changing state), not just this
-  // one. Depending on that array directly below would tear down and
-  // recreate the MediaRecorder on every such event — and since only a
-  // MediaRecorder's *first* chunk carries valid WebM container headers,
-  // every restart effectively truncates capture back down to one word.
-  // sid is a stable primitive that only changes when the actual track
-  // being captured changes (e.g. a device switch), so it's what the effect
-  // below depends on instead of the array.
-  const localMicTrack = microphones[0]?.publication.track;
+  const localMicTrack = localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
   const micTrackSid = localMicTrack?.sid;
 
-  // Must respect LiveKit mute state: stop sending audio (and flip captions
-  // off) the moment the mic is muted, not just stop what other
-  // participants hear.
+  // Must respect LiveKit mute state: stop sending audio while muted, but
+  // keep the transcript session armed so capture resumes when the mic does.
   useEffect(() => {
     if (!captionsEnabled) return;
     if (!isMicrophoneEnabled) {
-      toggleCaptions();
+      stopCapture();
       return;
     }
 
     const track = localMicTrack?.mediaStreamTrack;
     const ws = wsRef.current;
-    if (!track || !ws) return;
+    if (!track || !ws || ws.readyState !== WebSocket.OPEN) return;
 
     const mimeType = preferredMimeType();
     const recorder = new MediaRecorder(new MediaStream([track]), mimeType ? { mimeType } : undefined);
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) void event.data.arrayBuffer().then((buf) => ws.send(buf));
     };
-    recorder.start(250);
+    recorder.start(1_000);
     recorderRef.current = recorder;
 
-    return () => recorder.stop();
+    return () => {
+      if (recorder.state !== 'inactive') recorder.stop();
+      if (recorderRef.current === recorder) recorderRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captionsEnabled, isMicrophoneEnabled, micTrackSid]);
+  }, [captionsEnabled, isMicrophoneEnabled, micTrackSid, stopCapture]);
 
   const dismissSuggestion = useCallback((id: string) => {
     setSuggestions((prev) => prev.filter((s) => s.id !== id));
   }, []);
 
-  return { connectionError, captionsEnabled, captionsError, toggleCaptions, transcript, suggestions, dismissSuggestion };
+  return { connectionError, captionsEnabled, captionsError, toggleCaptions, transcript, minuteSummaries, suggestions, dismissSuggestion };
 }

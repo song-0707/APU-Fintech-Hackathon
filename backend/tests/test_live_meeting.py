@@ -187,3 +187,44 @@ def test_transcript_so_far_returns_empty_list_for_unknown_room():
     response = client.get("/live-meeting/never-used-room/transcript-so-far", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     assert response.json() == {"segments": []}
+
+
+def test_intelligence_so_far_returns_analyzed_minute_windows(monkeypatch):
+    monkeypatch.setattr(settings, "demo_mode", True)
+    room_name = "minute-room"
+    session = live_meeting.LiveMeetingSession(room_name=room_name)
+    session.segments = [
+        {
+            "speaker": "Alex Mercer",
+            "identity": "alex-mercer-1",
+            "text": "We decided to ship the dashboard refresh today",
+            "timestamp": "10:00:01",
+            "start": 1,
+        },
+        {
+            "speaker": "Alex Mercer",
+            "identity": "alex-mercer-1",
+            "text": "I will send the release notes",
+            "timestamp": "10:01:02",
+            "start": 62,
+        },
+    ]
+    live_meeting._sessions[room_name] = session
+
+    try:
+        asyncio.run(live_meeting._analyze_due_minute_windows(session, force=True))
+
+        token = _token_for(room=room_name)
+        response = client.get(
+            f"/live-meeting/{room_name}/intelligence-so-far",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["segments"]) == 2
+        assert [item["minute_index"] for item in data["minute_summaries"]] == [0, 1]
+        assert data["minute_summaries"][0]["decisions"] == ["We decided to ship the dashboard refresh today"]
+        assert data["minute_summaries"][1]["action_items"][0]["task"] == "I will send the release notes"
+    finally:
+        live_meeting._sessions.pop(room_name, None)

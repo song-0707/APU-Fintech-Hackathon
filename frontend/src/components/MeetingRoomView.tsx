@@ -11,7 +11,6 @@ import {
   Camera,
   CameraOff,
   AlertCircle,
-  Captions,
   LogOut,
   Maximize2,
   Mic,
@@ -23,7 +22,7 @@ import {
   Users,
   Video,
 } from 'lucide-react';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { useLiveMeetingSession } from '../hooks/useLiveMeetingSession';
 import { askCoco, BackendCitation } from '../services/api';
@@ -184,7 +183,6 @@ const RoomContent: React.FC<{
   const { localParticipant, isCameraEnabled, isMicrophoneEnabled, isScreenShareEnabled } = useLocalParticipant();
   const [mediaError, setMediaError] = useState('');
   const [showCoco, setShowCoco] = useState(false);
-  const [showTranscript, setShowTranscript] = useState(false);
   const [isScreenEnlarged, setIsScreenEnlarged] = useState(false);
   const [isProcessingPipeline, setIsProcessingPipeline] = useState(false);
   const [pipelineStep, setPipelineStep] = useState(0);
@@ -338,7 +336,11 @@ const RoomContent: React.FC<{
           </section>
           <CollaborativeWhiteboard roomName={roomName} />
           {showCoco && <CocoPanel />}
-          {showTranscript && <LiveTranscriptPanel transcript={liveSession.transcript} error={liveSession.captionsError || liveSession.connectionError} />}
+          <LiveTranscriptPanel
+            transcript={liveSession.transcript}
+            minuteSummaries={liveSession.minuteSummaries}
+            error={liveSession.captionsError || liveSession.connectionError}
+          />
         </div>
 
         <aside className="h-fit rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm xl:sticky xl:top-4">
@@ -368,14 +370,6 @@ const RoomContent: React.FC<{
           }`}
         >
           <Sparkles className="h-5 w-5" /><span>Coco</span>
-        </button>
-        <button
-          onClick={() => { setShowTranscript((v) => !v); liveSession.toggleCaptions(); }}
-          className={`flex min-w-20 flex-col items-center gap-1 rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
-            liveSession.captionsEnabled ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-          }`}
-        >
-          <Captions className="h-5 w-5" /><span>Transcript</span>
         </button>
         <ToggleButton label="Share" enabled={isScreenShareEnabled} onClick={() => void toggle('screen')} icon={<MonitorUp className="h-5 w-5" />} inactiveIcon={<MonitorUp className="h-5 w-5" />} />
         <ToggleButton
@@ -453,8 +447,9 @@ const RoomContent: React.FC<{
 };
 
 export const MeetingRoomView: React.FC = () => {
-  const { currentUser, pendingRoomJoin, setPendingRoomJoin } = useApp();
+  const { currentUser, pendingRoomJoin, setPendingRoomJoin, refreshMeetings } = useApp();
   const fullscreenRootRef = useRef<HTMLDivElement>(null);
+  const refreshPollRef = useRef<number | null>(null);
   const [roomName, setRoomName] = useState('');
   const [displayName, setDisplayName] = useState(currentUser.name);
   const [joinDetails, setJoinDetails] = useState<JoinDetails | null>(null);
@@ -467,6 +462,32 @@ export const MeetingRoomView: React.FC = () => {
     document.addEventListener('fullscreenchange', updateFullscreenState);
     return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
   }, []);
+
+  useEffect(() => () => {
+    if (refreshPollRef.current !== null) window.clearTimeout(refreshPollRef.current);
+  }, []);
+
+  const startPostMeetingRefreshPoll = useCallback(() => {
+    if (refreshPollRef.current !== null) window.clearTimeout(refreshPollRef.current);
+
+    let attempts = 0;
+    const poll = () => {
+      attempts += 1;
+      refreshMeetings()
+        .catch((refreshError) => {
+          console.warn('[Corporate Brain] Live meeting refresh failed:', refreshError);
+        })
+        .finally(() => {
+          if (attempts < 36) {
+            refreshPollRef.current = window.setTimeout(poll, 5000);
+          } else {
+            refreshPollRef.current = null;
+          }
+        });
+    };
+
+    refreshPollRef.current = window.setTimeout(poll, 1000);
+  }, [refreshMeetings]);
 
   const joinWithRoomName = async (targetRoomName: string, targetDisplayName: string) => {
     setIsJoining(true); setError('');
@@ -517,6 +538,7 @@ export const MeetingRoomView: React.FC = () => {
               if (document.fullscreenElement === fullscreenRootRef.current) void document.exitFullscreen();
               setJoinDetails(null);
               setError('');
+              startPostMeetingRefreshPoll();
             }}
           />
         </LiveKitRoom>
