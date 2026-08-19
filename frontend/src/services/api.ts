@@ -164,13 +164,28 @@ async function apiGet<T>(path: string): Promise<T> {
   return res.json();
 }
 
+/** For per-meeting endpoints (summary/transcript/graph-data) that signal
+ * "not processed yet" with a 202 status rather than a 4xx/5xx — that's
+ * HTTP-successful (res.ok is true for any 2xx), so treating it like any
+ * other apiGet call would hand callers a `{detail: "..."}` body shaped
+ * nothing like the real payload. A scheduled-but-unprocessed meeting hits
+ * this on every one of these three endpoints, which GET /meetings started
+ * legitimately returning once invited-but-unprocessed meetings became
+ * visible — not an edge case once that's true. */
+async function apiGetOrNullIfNotReady<T>(path: string): Promise<T | null> {
+  const res = await fetch(`${API_BASE}${path}`, { headers: identityHeaders() });
+  if (res.status === 202) return null;
+  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  return res.json();
+}
+
 export async function listMeetings(): Promise<BackendMeetingListItem[]> {
   return apiGet('/meetings');
 }
 
 export async function getMeetingSummary(meetingId: string): Promise<BackendSummary | null> {
   try {
-    return await apiGet(`/meeting/${meetingId}/summary`);
+    return await apiGetOrNullIfNotReady(`/meeting/${meetingId}/summary`);
   } catch {
     return null;
   }
@@ -178,7 +193,7 @@ export async function getMeetingSummary(meetingId: string): Promise<BackendSumma
 
 export async function getMeetingTranscript(meetingId: string): Promise<BackendTranscript | null> {
   try {
-    return await apiGet(`/meeting/${meetingId}/transcript`);
+    return await apiGetOrNullIfNotReady(`/meeting/${meetingId}/transcript`);
   } catch {
     return null;
   }
@@ -186,7 +201,7 @@ export async function getMeetingTranscript(meetingId: string): Promise<BackendTr
 
 export async function getGraphData(meetingId: string): Promise<BackendGraphData | null> {
   try {
-    return await apiGet(`/meeting/${meetingId}/graph-data`);
+    return await apiGetOrNullIfNotReady(`/meeting/${meetingId}/graph-data`);
   } catch {
     return null;
   }

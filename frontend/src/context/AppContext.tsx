@@ -711,17 +711,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const refreshMeetings = async () => {
+    // No `loaded.length > 0` guard: a genuinely unreachable backend already
+    // throws inside fetchMeetingsFromBackend (api.listMeetings() rejects),
+    // which propagates to this function's own caller instead of resolving
+    // here -- so by the time this line runs, `loaded` is a real, current
+    // answer from a reachable backend, and an empty array is legitimate
+    // (e.g. this user just declined their only invite). Skipping the
+    // update on `loaded.length === 0` left exactly that case stuck showing
+    // a stale, already-declined meeting forever.
     const loaded = await fetchMeetingsFromBackend();
-    if (loaded.length > 0) {
-      // Replace every previously-loaded real-backend meeting with this
-      // fresh set (not just de-dupe by id) -- otherwise switching demo
-      // users via switchDemoUser() would leave the PREVIOUS user's
-      // backend-scoped meetings sitting in state alongside the new user's,
-      // since real backend ids rarely collide across users. Bundled
-      // `mtg-...` demo/mock meetings are untouched -- they aren't
-      // user-scoped and aren't something this fetch manages.
-      setMeetings((prev) => [...loaded, ...prev.filter((m) => m.id.startsWith('mtg-'))]);
-    }
+    // Replace every previously-loaded real-backend meeting with this fresh
+    // set (not just de-dupe by id) -- otherwise switching demo users via
+    // switchDemoUser() would leave the PREVIOUS user's backend-scoped
+    // meetings sitting in state alongside the new user's, since real
+    // backend ids rarely collide across users. Bundled `mtg-...` demo/mock
+    // meetings are untouched -- they aren't user-scoped and aren't
+    // something this fetch manages.
+    setMeetings((prev) => [...loaded, ...prev.filter((m) => m.id.startsWith('mtg-'))]);
   };
 
   useEffect(() => {

@@ -201,16 +201,23 @@ def list_meetings(
     # filter *within* that set — it used to be the only scoping this
     # endpoint had, which is exactly what let a direct API call see
     # everything by just omitting it.
+    #
+    # invite_status_by_meeting is looked up for every caller, management
+    # included — a management caller's broad visibility is about seeing
+    # meetings they weren't personally invited to, not about overriding
+    # their own accept/decline choice on ones they were. Every demo
+    # employee in this app is management-flagged, so this branch is the
+    # common path, not an edge case.
+    invite_status_by_meeting: dict[str, str] = {
+        inv.meeting_id: inv.rsvp_status
+        for inv in db.query(MeetingInvite).filter_by(employee_id=caller.id)
+    }
+
     accessible_ids: set[str] | None = None
-    invite_status_by_meeting: dict[str, str] = {}
     if not caller.is_management:
         accessible_ids = {
             mp.meeting_id
             for mp in db.query(MeetingParticipant).filter_by(employee_id=caller.id)
-        }
-        invite_status_by_meeting = {
-            inv.meeting_id: inv.rsvp_status
-            for inv in db.query(MeetingInvite).filter_by(employee_id=caller.id)
         }
         accessible_ids |= {
             meeting_id for meeting_id, status in invite_status_by_meeting.items()
@@ -220,6 +227,8 @@ def list_meetings(
     items: list[MeetingListItem] = []
     for meeting in query.order_by(Meeting.created_at.desc()).all():
         if accessible_ids is not None and meeting.id not in accessible_ids:
+            continue
+        if invite_status_by_meeting.get(meeting.id) == "declined":
             continue
 
         summary = _load_json(f"summaries/{meeting.id}.json")
