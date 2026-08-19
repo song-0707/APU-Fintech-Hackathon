@@ -452,7 +452,7 @@ const RoomContent: React.FC<{
 };
 
 export const MeetingRoomView: React.FC = () => {
-  const { currentUser } = useApp();
+  const { currentUser, pendingRoomJoin, setPendingRoomJoin } = useApp();
   const fullscreenRootRef = useRef<HTMLDivElement>(null);
   const [roomName, setRoomName] = useState('');
   const [displayName, setDisplayName] = useState(currentUser.name);
@@ -467,13 +467,30 @@ export const MeetingRoomView: React.FC = () => {
     return () => document.removeEventListener('fullscreenchange', updateFullscreenState);
   }, []);
 
-  const joinRoom = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const joinWithRoomName = async (targetRoomName: string, targetDisplayName: string) => {
     setIsJoining(true); setError('');
-    try { setJoinDetails(await getJoinDetails(roomName.trim(), displayName.trim())); }
+    try { setJoinDetails(await getJoinDetails(targetRoomName.trim(), targetDisplayName.trim())); }
     catch (joinError) { setError(joinError instanceof Error ? joinError.message : 'Unable to join meeting.'); }
     finally { setIsJoining(false); }
   };
+
+  const joinRoom = async (event: React.FormEvent) => {
+    event.preventDefault();
+    await joinWithRoomName(roomName, displayName);
+  };
+
+  // Arriving here via InvitationCard's "Enter Room" skips the manual entry
+  // screen and joins the meeting's own room directly. Cleared immediately
+  // so navigating away and back to Live Meeting later falls through to the
+  // normal manual-entry screen, not a stale auto-join.
+  useEffect(() => {
+    if (!pendingRoomJoin) return;
+    const { roomName: targetRoom, displayName: targetDisplayName } = pendingRoomJoin;
+    setPendingRoomJoin(null);
+    setRoomName(targetRoom);
+    void joinWithRoomName(targetRoom, targetDisplayName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRoomJoin]);
 
   const toggleFullscreen = async () => {
     if (document.fullscreenElement === fullscreenRootRef.current) {
