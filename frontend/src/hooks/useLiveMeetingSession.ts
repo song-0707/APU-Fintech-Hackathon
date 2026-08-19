@@ -24,7 +24,8 @@ export type LiveMeetingSessionState = {
 
 const apiBaseUrl = (import.meta.env.VITE_API_URL as string | undefined)
   ?? `${window.location.protocol}//${window.location.hostname}:8000`;
-const wsBaseUrl = apiBaseUrl.replace(/^http/, 'ws');
+const normalizedApiBaseUrl = apiBaseUrl.replace(/\/$/, '');
+const wsBaseUrl = normalizedApiBaseUrl.replace(/^http/, 'ws');
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -111,7 +112,7 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
   // replay of its own, so this is a one-time backend read on mount.
   useEffect(() => {
     if (!token) return;
-    fetch(`${apiBaseUrl}/live-meeting/${roomName}/transcript-so-far`, {
+    fetch(`${normalizedApiBaseUrl}/live-meeting/${roomName}/transcript-so-far`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : { segments: [] }))

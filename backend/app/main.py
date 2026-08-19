@@ -63,7 +63,11 @@ _allowed_origins = [
     "http://[::1]:5173",
 ]
 if settings.frontend_origin:
-    _allowed_origins.append(settings.frontend_origin)
+    _allowed_origins.extend(
+        origin.strip().rstrip("/")
+        for origin in settings.frontend_origin.split(",")
+        if origin.strip()
+    )
 
 app.add_middleware(
     CORSMiddleware,
