@@ -404,6 +404,8 @@ def get_global_graph_data(
 
     for row in neo4j_service.run_query(
         """MATCH (s)-[r:RELATES_AS]->(o)
+           WHERE EXISTS { MATCH (s)-[:MENTIONED_IN]->(:Meeting) }
+             AND EXISTS { MATCH (o)-[:MENTIONED_IN]->(:Meeting) }
            RETURN s.name AS subject, coalesce(s.display_name, s.name) AS subject_label, labels(s)[0] AS subject_type,
                   o.name AS object, coalesce(o.display_name, o.name) AS object_label, labels(o)[0] AS object_type,
                   r.predicate AS predicate"""

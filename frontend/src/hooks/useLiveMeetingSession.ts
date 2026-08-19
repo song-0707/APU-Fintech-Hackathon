@@ -1,8 +1,23 @@
-import { useLocalParticipant, useRoomContext, useTracks } from '@livekit/components-react';
+import { useLocalParticipant, useRoomContext } from '@livekit/components-react';
 import { RoomEvent, Track } from 'livekit-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export type CaptionLine = { id: string; speaker: string; text: string; timestamp: string };
+export type CaptionLine = { id: string; speaker: string; text: string; timestamp: string; start?: number; end?: number };
+export type LiveActionItem = { task: string; assignee: string; deadline?: string; priority?: string };
+export type LiveMinuteSummary = {
+  id: string;
+  room_name: string;
+  minute_index: number;
+  window_start: number;
+  window_end: number;
+  label: string;
+  summary: string;
+  decisions: string[];
+  action_items: LiveActionItem[];
+  risks: string[];
+  segment_count: number;
+  provisional: boolean;
+};
 export type LiveSuggestion = {
   id: string;
   message: string;
@@ -16,8 +31,9 @@ export type LiveMeetingSessionState = {
   connectionError: string;
   captionsEnabled: boolean;
   captionsError: string;
-  toggleCaptions: () => void;
   transcript: CaptionLine[];
+  minuteSummaries: LiveMinuteSummary[];
+  missedMinuteSummaries: LiveMinuteSummary[];
   suggestions: LiveSuggestion[];
   dismissSuggestion: (id: string) => void;
 };
@@ -38,21 +54,30 @@ const nextLocalId = () => `local-${Date.now()}-${localIdCounter++}`;
 
 export function useLiveMeetingSession(roomName: string, token: string): LiveMeetingSessionState {
   const room = useRoomContext();
-  const { isMicrophoneEnabled } = useLocalParticipant();
-  const microphones = useTracks([Track.Source.Microphone], { onlySubscribed: true });
+  const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
 
   const [connectionError, setConnectionError] = useState('');
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
   const [captionsError, setCaptionsError] = useState('');
   const [transcript, setTranscript] = useState<CaptionLine[]>([]);
   const [suggestions, setSuggestions] = useState<LiveSuggestion[]>([]);
+  const [minuteSummaries, setMinuteSummaries] = useState<LiveMinuteSummary[]>([]);
+  const [missedMinuteSummaries, setMissedMinuteSummaries] = useState<LiveMinuteSummary[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const audioSendChainRef = useRef<Promise<void>>(Promise.resolve());
 
-  const publish = useCallback((topic: 'live-transcript' | 'live-suggestion', payload: unknown) => {
+  const publish = useCallback((topic: 'live-transcript' | 'live-suggestion' | 'live-minute-intelligence', payload: unknown) => {
     void room.localParticipant.publishData(encoder.encode(JSON.stringify(payload)), { reliable: true, topic });
   }, [room]);
+
+  const upsertMinuteSummary = useCallback((summary: LiveMinuteSummary) => {
+    setMinuteSummaries((prev) => {
+      const withoutExisting = prev.filter((item) => item.id !== summary.id);
+      return [...withoutExisting, summary].sort((a, b) => a.minute_index - b.minute_index);
+    });
+  }, []);
 
   // Session WS: opens once on room join, independent of the caption toggle.
   useEffect(() => {
@@ -72,15 +97,28 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
 
     ws.onopen = () => {
       setConnectionError('');
+      setCaptionsError('');
       ws.send(JSON.stringify({ type: 'auth', token }));
+      ws.send(JSON.stringify({ type: 'captions_on' }));
+      setCaptionsEnabled(true);
     };
 
     ws.onmessage = (event) => {
       const payload = JSON.parse(event.data as string);
       if (payload.type === 'caption') {
-        const line: CaptionLine = { id: nextLocalId(), speaker: payload.speaker, text: payload.text, timestamp: payload.timestamp };
+        const line: CaptionLine = {
+          id: nextLocalId(),
+          speaker: payload.speaker,
+          text: payload.text,
+          timestamp: payload.timestamp,
+          start: payload.start,
+          end: payload.end,
+        };
         setTranscript((prev) => [...prev, line]);
         publish('live-transcript', line);
+      } else if (payload.type === 'minute_intelligence') {
+        upsertMinuteSummary(payload.summary);
+        publish('live-minute-intelligence', payload.summary);
       } else if (payload.type === 'contradiction_suggestion') {
         const suggestion: LiveSuggestion = {
           id: nextLocalId(),
@@ -111,15 +149,23 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
   // replay of its own, so this is a one-time backend read on mount.
   useEffect(() => {
     if (!token) return;
-    fetch(`${apiBaseUrl}/live-meeting/${roomName}/transcript-so-far`, {
+    fetch(`${apiBaseUrl}/live-meeting/${roomName}/intelligence-so-far`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => (res.ok ? res.json() : { segments: [] }))
-      .then((data: { segments: Array<{ speaker: string; text: string; timestamp: string }> }) => {
+      .then((res) => (res.ok ? res.json() : { segments: [], minute_summaries: [] }))
+      .then((data: {
+        segments: Array<{ speaker: string; text: string; timestamp: string; start?: number; end?: number }>;
+        minute_summaries: LiveMinuteSummary[];
+      }) => {
         setTranscript((prev) => [
-          ...data.segments.map((s) => ({ id: nextLocalId(), speaker: s.speaker, text: s.text, timestamp: s.timestamp })),
+          ...data.segments.map((s) => ({
+            id: nextLocalId(), speaker: s.speaker, text: s.text, timestamp: s.timestamp, start: s.start, end: s.end,
+          })),
           ...prev,
         ]);
+        const summaries = (data.minute_summaries || []).sort((a, b) => a.minute_index - b.minute_index);
+        setMinuteSummaries(summaries);
+        setMissedMinuteSummaries(summaries);
       })
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,59 +175,36 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
   // LiveKit data-channel pattern CollaborativeWhiteboard.tsx already uses.
   useEffect(() => {
     const handleMessage = (data: Uint8Array, _participant?: unknown, _kind?: unknown, topic?: string) => {
-      if (topic !== 'live-transcript' && topic !== 'live-suggestion') return;
+      if (topic !== 'live-transcript' && topic !== 'live-suggestion' && topic !== 'live-minute-intelligence') return;
       const payload = JSON.parse(decoder.decode(data));
       if (topic === 'live-transcript') {
         setTranscript((prev) => (prev.some((line) => line.id === payload.id) ? prev : [...prev, payload]));
-      } else {
+      } else if (topic === 'live-suggestion') {
         setSuggestions((prev) => (prev.some((s) => s.id === payload.id) ? prev : [...prev, payload]));
+      } else {
+        upsertMinuteSummary(payload);
       }
     };
     room.on(RoomEvent.DataReceived, handleMessage);
     return () => { room.off(RoomEvent.DataReceived, handleMessage); };
-  }, [room]);
+  }, [room, upsertMinuteSummary]);
 
   const stopCapture = useCallback(() => {
     recorderRef.current?.stop();
     recorderRef.current = null;
   }, []);
 
-  const toggleCaptions = useCallback(() => {
-    setCaptionsEnabled((enabled) => {
-      const next = !enabled;
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return enabled;
+  const localMicPublication = localParticipant.getTrackPublication(Track.Source.Microphone);
+  const localMicTrack = localMicPublication?.track;
+  const micTrackSid = localMicPublication?.trackSid ?? localMicTrack?.sid;
 
-      if (next) {
-        setCaptionsError('');
-        ws.send(JSON.stringify({ type: 'captions_on' }));
-      } else {
-        ws.send(JSON.stringify({ type: 'captions_off' }));
-        stopCapture();
-      }
-      return next;
-    });
-  }, [stopCapture]);
-
-  // useTracks() emits a brand-new array on essentially any room-wide track
-  // event (any participant's mic/camera changing state), not just this
-  // one. Depending on that array directly below would tear down and
-  // recreate the MediaRecorder on every such event — and since only a
-  // MediaRecorder's *first* chunk carries valid WebM container headers,
-  // every restart effectively truncates capture back down to one word.
-  // sid is a stable primitive that only changes when the actual track
-  // being captured changes (e.g. a device switch), so it's what the effect
-  // below depends on instead of the array.
-  const localMicTrack = microphones[0]?.publication.track;
-  const micTrackSid = localMicTrack?.sid;
-
-  // Must respect LiveKit mute state: stop sending audio (and flip captions
-  // off) the moment the mic is muted, not just stop what other
-  // participants hear.
+  // Must respect LiveKit mute state: stop sending audio while muted, then
+  // resume automatically when the participant unmutes. The Deepgram session
+  // stays alive via backend keepalives so transcription remains automatic.
   useEffect(() => {
     if (!captionsEnabled) return;
     if (!isMicrophoneEnabled) {
-      toggleCaptions();
+      stopCapture();
       return;
     }
 
@@ -192,9 +215,20 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
     const mimeType = preferredMimeType();
     const recorder = new MediaRecorder(new MediaStream([track]), mimeType ? { mimeType } : undefined);
     recorder.ondataavailable = (event) => {
-      if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) void event.data.arrayBuffer().then((buf) => ws.send(buf));
+      if (event.data.size <= 0 || ws.readyState !== WebSocket.OPEN) return;
+      const blob = event.data;
+      audioSendChainRef.current = audioSendChainRef.current
+        .then(async () => {
+          const buf = await blob.arrayBuffer();
+          if (ws.readyState === WebSocket.OPEN) ws.send(buf);
+        })
+        .catch(() => undefined);
     };
-    recorder.start(250);
+    recorder.onerror = () => {
+      setCaptionsError('The browser stopped live captions unexpectedly.');
+      setCaptionsEnabled(false);
+    };
+    recorder.start(1_000);
     recorderRef.current = recorder;
 
     return () => recorder.stop();
@@ -205,5 +239,14 @@ export function useLiveMeetingSession(roomName: string, token: string): LiveMeet
     setSuggestions((prev) => prev.filter((s) => s.id !== id));
   }, []);
 
-  return { connectionError, captionsEnabled, captionsError, toggleCaptions, transcript, suggestions, dismissSuggestion };
+  return {
+    connectionError,
+    captionsEnabled,
+    captionsError,
+    transcript,
+    minuteSummaries,
+    missedMinuteSummaries,
+    suggestions,
+    dismissSuggestion,
+  };
 }

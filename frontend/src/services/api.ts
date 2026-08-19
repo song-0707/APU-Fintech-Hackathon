@@ -245,11 +245,29 @@ export async function setNodeDisplayName(
 export async function askCoco(query: string): Promise<BackendQueryResponse> {
   const res = await fetch(`${API_BASE}/query`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...identityHeaders() },
     body: JSON.stringify({ query }),
   });
   if (!res.ok) throw new Error(`Ask Coco failed: ${res.status}`);
   return res.json();
+}
+
+export interface BackendBrief {
+  meeting_id: string;
+  related_meetings: Array<{ id: string; title: string; date: string | null }>;
+  decisions: Array<{ text: string; confidence: string; speaker: string | null; meeting: string }>;
+  related_action_items: Array<{ task: string; assignee: string | null; deadline: string | null; meeting: string }>;
+  contradictions: Array<{ decision: string; conflicts_with: string; message: string | null; meeting: string }>;
+  risks: string[];
+  suggested_agenda: string[];
+}
+
+/** GET /meetings/{id}/brief — related previous meetings (same project),
+ * their decisions/action items/contradictions/risks, and a suggested
+ * agenda. Only meaningful for meetings with a real backend id (see
+ * DashboardView.tsx's guard) — mock/locally-scheduled meetings 404. */
+export async function getMeetingBrief(meetingId: string): Promise<BackendBrief> {
+  return apiGet(`/meetings/${meetingId}/brief`);
 }
 
 export async function getUserDashboard(userId: string): Promise<BackendDashboard> {

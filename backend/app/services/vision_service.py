@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from app.core.config import get_settings
+from app.services.gemini_client import generate_content, has_gemini_credentials
 from app.services.gemini_service import call_agnes_api
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,7 @@ settings = get_settings()
 def extract_names_from_video(video_path: str) -> Dict[float, List[str]]:
     """Sample 4 frames across the video, ask Vision to read participant
     names off nameplates/tiles. Returns {timestamp_s: [names]}."""
-    if not settings.agnes_api_key and not settings.gemini_api_key:
+    if not settings.agnes_api_key and not has_gemini_credentials():
         return {}
 
     import cv2
@@ -30,10 +31,7 @@ def extract_names_from_video(video_path: str) -> Dict[float, List[str]]:
     frames_dir = Path(settings.storage_path) / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    gemini_client = None
-    if settings.gemini_api_key:
-        from google import genai
-        gemini_client = genai.Client(api_key=settings.gemini_api_key)
+    gemini_configured = has_gemini_credentials()
 
     try:
         cap = cv2.VideoCapture(video_path)
@@ -63,7 +61,7 @@ def extract_names_from_video(video_path: str) -> Dict[float, List[str]]:
                 image_bytes = frame_path.read_bytes()
                 resp_text = ""
 
-                if settings.gemini_api_key:
+                if gemini_configured:
                     try:
                         from google.genai import types
                         prompt = (
@@ -72,8 +70,8 @@ def extract_names_from_video(video_path: str) -> Dict[float, List[str]]:
                             'Return ONLY JSON: {"names": ["Name1", "Name2"]}. '
                             'If no names visible: {"names": []}.'
                         )
-                        resp = gemini_client.models.generate_content(
-                            model="gemini-2.0-flash",
+                        resp = generate_content(
+                            model=settings.gemini_model,
                             contents=[
                                 prompt,
                                 types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
