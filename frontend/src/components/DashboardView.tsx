@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
+import * as api from '../services/api';
 import {
   Clock,
   CheckCircle2,
@@ -7,8 +8,21 @@ import {
   Filter,
   Calendar,
   ArrowRight,
-  Upload
+  Upload,
+  FileText,
+  X
 } from 'lucide-react';
+
+// Only meetings with a real backend id can have a brief generated — mock/
+// bundled demo meetings (initialMeetings) and locally-scheduled ones
+// (AppContext.addMeeting, which never calls the backend) use a client-only
+// `mtg-...` id and would 404. This naturally covers whichever meetings
+// actually have real ids today (currently: processed/completed ones) and
+// keeps working without changes if meeting-scheduling is ever wired to the
+// backend later.
+function hasRealBackendId(meetingId: string): boolean {
+  return !meetingId.startsWith('mtg-');
+}
 
 export const DashboardView: React.FC = () => {
   const {
@@ -21,6 +35,22 @@ export const DashboardView: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [projectFilter, setProjectFilter] = useState('ALL');
+
+  const [briefMeetingTitle, setBriefMeetingTitle] = useState<string | null>(null);
+  const [briefData, setBriefData] = useState<api.BackendBrief | null>(null);
+  const [briefLoading, setBriefLoading] = useState(false);
+  const [briefError, setBriefError] = useState<string | null>(null);
+
+  const handleGenerateBrief = (meetingId: string, title: string) => {
+    setBriefMeetingTitle(title);
+    setBriefData(null);
+    setBriefError(null);
+    setBriefLoading(true);
+    api.getMeetingBrief(meetingId)
+      .then(setBriefData)
+      .catch((err) => setBriefError(err instanceof Error ? err.message : 'Failed to generate brief.'))
+      .finally(() => setBriefLoading(false));
+  };
 
   // meetings is already scoped to currentUser — the backend's /meetings
   // enforces that (see backend/app/api/meetings.py), so re-filtering it
@@ -176,6 +206,15 @@ export const DashboardView: React.FC = () => {
                 </div>
 
                 <div className="shrink-0 flex items-center gap-3">
+                  {hasRealBackendId(mtg.id) && (
+                    <button
+                      onClick={() => handleGenerateBrief(mtg.id, mtg.title)}
+                      className="cursor-pointer px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold rounded-xl flex items-center space-x-1.5 transition-all hover:bg-slate-50 dark:hover:bg-slate-700"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>Generate Brief</span>
+                    </button>
+                  )}
                   {(['Preprocessing', 'ASR', 'LLM', 'Graph', 'Retrying'] as string[]).includes(mtg.status) ? (
                     <div className="flex items-center space-x-1.5 text-xs font-bold text-blue-600 dark:text-blue-400 animate-pulse">
                       <span className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></span>
@@ -263,12 +302,101 @@ export const DashboardView: React.FC = () => {
                   <span>{mtg.decisions?.length || 0} Decisions • {mtg.actionItems?.length || 0} Tasks</span>
                   <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
                 </div>
+                {hasRealBackendId(mtg.id) && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleGenerateBrief(mtg.id, mtg.title); }}
+                    className="cursor-pointer text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1.5"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Generate Brief</span>
+                  </button>
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
 
+      {briefMeetingTitle && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 max-w-lg w-full max-h-[80vh] shadow-2xl space-y-4 flex flex-col">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-950 flex items-center justify-center text-blue-600 dark:text-blue-400 shrink-0">
+                  <FileText className="w-4 h-4" />
+                </div>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">Brief: {briefMeetingTitle}</h4>
+              </div>
+              <button
+                onClick={() => setBriefMeetingTitle(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto space-y-4">
+              {briefLoading && <p className="text-xs text-slate-400 text-center py-6">Generating…</p>}
+              {!briefLoading && briefError && <p className="text-xs text-red-500 text-center py-6">{briefError}</p>}
+              {!briefLoading && !briefError && briefData && (
+                <>
+                  {briefData.suggested_agenda.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h5 className="text-xs font-bold text-slate-700 dark:text-slate-300">Suggested Agenda</h5>
+                      <ul className="list-disc list-inside space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                        {briefData.suggested_agenda.map((item, i) => <li key={i}>{item}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {briefData.related_meetings.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h5 className="text-xs font-bold text-slate-700 dark:text-slate-300">Related Previous Meetings</h5>
+                      <ul className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                        {briefData.related_meetings.map((m) => <li key={m.id}>{m.title}{m.date ? ` — ${m.date}` : ''}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {briefData.decisions.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h5 className="text-xs font-bold text-slate-700 dark:text-slate-300">Previous Decisions</h5>
+                      <ul className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                        {briefData.decisions.map((d, i) => <li key={i}>{d.text} <span className="text-slate-400">— {d.meeting}</span></li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {briefData.related_action_items.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h5 className="text-xs font-bold text-slate-700 dark:text-slate-300">Related Action Items from Previous Meetings</h5>
+                      <ul className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                        {briefData.related_action_items.map((a, i) => <li key={i}>{a.task} — {a.assignee || 'unassigned'}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {briefData.contradictions.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h5 className="text-xs font-bold text-rose-600 dark:text-rose-400">Contradictions to Resolve</h5>
+                      <ul className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                        {briefData.contradictions.map((c, i) => <li key={i}>"{c.decision}" vs. "{c.conflicts_with}"</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {briefData.risks.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h5 className="text-xs font-bold text-amber-600 dark:text-amber-400">Risks</h5>
+                      <ul className="space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                        {briefData.risks.map((r, i) => <li key={i}>{r}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {briefData.related_meetings.length === 0 && (
+                    <p className="text-xs text-slate-400 text-center py-6">No related previous meetings found for this project yet.</p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

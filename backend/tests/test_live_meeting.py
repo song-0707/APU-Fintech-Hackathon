@@ -187,3 +187,93 @@ def test_transcript_so_far_returns_empty_list_for_unknown_room():
     response = client.get("/live-meeting/never-used-room/transcript-so-far", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     assert response.json() == {"segments": []}
+
+
+def test_live_minute_intelligence_fallback_extracts_window():
+    item = live_meeting._fallback_minute_intelligence(
+        "room",
+        0,
+        [
+            {
+                "speaker": "Thim Yee Song",
+                "text": "Decision: we will approve Provider X after review.",
+                "start": 12.0,
+                "timestamp": "10:00:12",
+            },
+            {
+                "speaker": "Duncan",
+                "text": "Action item: Duncan will prepare the fallback integration plan.",
+                "start": 24.0,
+                "timestamp": "10:00:24",
+            },
+            {
+                "speaker": "Thim Yee Song",
+                "text": "Risk: the vendor questionnaire delay may put the launch at risk.",
+                "start": 42.0,
+                "timestamp": "10:00:42",
+            },
+        ],
+    )
+
+    assert item.label == "00:00-01:00"
+    assert item.provisional is True
+    assert item.decisions
+    assert item.action_items[0].assignee == "Duncan"
+    assert item.risks
+
+
+def test_live_minute_fallback_skips_agenda_and_keeps_concrete_commitment():
+    item = live_meeting._fallback_minute_intelligence(
+        "room",
+        0,
+        [
+            {
+                "speaker": "Thim Yee Song",
+                "text": "Today we are going to discuss about the task next week",
+                "start": 2.0,
+                "timestamp": "10:00:02",
+            },
+            {
+                "speaker": "Thim Yee Song",
+                "text": "I am going to present the project of customer feedback to CEO next week",
+                "start": 12.0,
+                "timestamp": "10:00:12",
+            },
+        ],
+    )
+
+    assert [action.task for action in item.action_items] == [
+        "Present customer feedback project to CEO next week"
+    ]
+
+
+def test_analyze_due_minute_windows_stores_summary(monkeypatch):
+    monkeypatch.setattr(settings, "demo_mode", True)
+    monkeypatch.setattr(live_meeting, "_MINUTE_WINDOW_SECONDS", 60.0)
+    session = live_meeting.LiveMeetingSession(room_name="minute-room")
+    session.segments = [
+        {"speaker": "Duncan", "text": "Action item: Duncan will prepare the rollout plan.", "start": 1.0, "timestamp": "10:00:01"}
+    ]
+
+    asyncio.run(live_meeting._analyze_due_minute_windows(session, force=True))
+
+    assert 0 in session.minute_summaries
+    assert session.minute_summaries[0].action_items[0].assignee == "Duncan"
+
+
+def test_intelligence_so_far_returns_segments_and_minute_summaries():
+    room = "intelligence-room"
+    token = _token_for(room=room)
+    session = live_meeting.LiveMeetingSession(room_name=room)
+    session.segments = [{"speaker": "Alex Mercer", "text": "hello", "timestamp": "10:00:01", "start": 1.0}]
+    session.minute_summaries[0] = live_meeting._fallback_minute_intelligence(room, 0, session.segments)
+    live_meeting._sessions[room] = session
+    try:
+        response = client.get(f"/live-meeting/{room}/intelligence-so-far", headers={"Authorization": f"Bearer {token}"})
+    finally:
+        live_meeting._sessions.pop(room, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["segments"][0]["text"] == "hello"
+    assert body["minute_summaries"][0]["label"] == "00:00-01:00"
