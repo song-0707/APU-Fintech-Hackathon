@@ -202,10 +202,19 @@ def list_meetings(
     # endpoint had, which is exactly what let a direct API call see
     # everything by just omitting it.
     accessible_ids: set[str] | None = None
+    invite_status_by_meeting: dict[str, str] = {}
     if not caller.is_management:
         accessible_ids = {
             mp.meeting_id
             for mp in db.query(MeetingParticipant).filter_by(employee_id=caller.id)
+        }
+        invite_status_by_meeting = {
+            inv.meeting_id: inv.rsvp_status
+            for inv in db.query(MeetingInvite).filter_by(employee_id=caller.id)
+        }
+        accessible_ids |= {
+            meeting_id for meeting_id, status in invite_status_by_meeting.items()
+            if status != "declined"
         }
 
     items: list[MeetingListItem] = []
@@ -236,6 +245,9 @@ def list_meetings(
             # real: no source recording exists for them, not just "not
             # loaded yet".
             audio_filename=Path(meeting.file_path).name if meeting.file_path else None,
+            source=meeting.source,
+            room_id=meeting.room_id,
+            rsvp_status=invite_status_by_meeting.get(meeting.id),
         ))
     return items
 
