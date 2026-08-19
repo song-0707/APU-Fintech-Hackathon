@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.database.session import Base
@@ -26,10 +26,29 @@ class Meeting(Base):
     file_path = Column(String, nullable=True)
     status = Column(String, nullable=False, default="pending")
     progress = Column(Integer, nullable=False, default=0)
+    source = Column(String, nullable=True)    # 'scheduled' | 'live' | 'upload'
+    room_id = Column(String, nullable=True)   # LiveKit room name; set for 'scheduled' and 'live' only
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     tasks = relationship("ProcessingTask", back_populates="meeting", cascade="all, delete-orphan")
+
+
+class MeetingInvite(Base):
+    """Pre-processing access + RSVP for a scheduled meeting invitee. Deliberately separate from
+    MeetingParticipant (populated only at processing time from the AI-extracted speaker list) —
+    this answers a different question: can this employee see this *unprocessed* meeting, and
+    what's their RSVP, for the window between scheduling and processing."""
+    __tablename__ = "meeting_invites"
+
+    id = Column(String, primary_key=True, default=_new_id)
+    meeting_id = Column(String, ForeignKey("meetings.id"), nullable=False)
+    employee_id = Column(String, ForeignKey("employees.id"), nullable=False)
+    rsvp_status = Column(String, nullable=False, default="pending")  # 'pending' | 'accepted' | 'declined'
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (UniqueConstraint("meeting_id", "employee_id", name="uq_invite_meeting_employee"),)
 
 
 class ProcessingTask(Base):
