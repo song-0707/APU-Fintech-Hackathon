@@ -51,7 +51,7 @@ _SUMMARY_KEYWORDS = (
     "what happened in", "what was discussed",
 )
 
-QueryBuilder = Callable[[str], tuple[str, dict]]
+QueryBuilder = Callable[[str, "str | None"], tuple[str, dict]]
 
 
 def _person_from_query(query: str) -> str | None:
@@ -65,54 +65,72 @@ def _person_from_query(query: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
-def _action_items(query: str) -> tuple[str, dict]:
+def _action_items(query: str, meeting_id: "str | None") -> tuple[str, dict]:
     person = _person_from_query(query)
+    # WITH before WHERE is load-bearing, not style: m only exists via the
+    # OPTIONAL MATCH, and a WHERE placed directly after an OPTIONAL MATCH
+    # binds to *that* clause (deciding whether it matches at all) instead of
+    # filtering the query's rows — a and p from the mandatory match would
+    # come back for every row regardless of $meeting_id. Materializing with
+    # WITH first forces WHERE to filter the already-optional-matched rows.
     cypher = (
         "MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person) "
         "OPTIONAL MATCH (a)-[:MADE_IN]->(m:Meeting) "
-        "WHERE $person IS NULL OR toLower(p.name) = toLower($person) "
+        "WITH a, p, m "
+        "WHERE ($person IS NULL OR toLower(p.name) = toLower($person)) "
+        "AND ($meeting_id IS NULL OR m.id = $meeting_id) "
         "RETURN a.task AS task, p.name AS assignee, a.deadline AS deadline, "
         "a.priority AS priority, m.title AS meeting ORDER BY a.deadline"
     )
-    return cypher, {"person": person}
+    return cypher, {"person": person, "meeting_id": meeting_id}
 
 
-def _decisions(_: str) -> tuple[str, dict]:
+def _decisions(_: str, meeting_id: "str | None") -> tuple[str, dict]:
+    # WHERE before OPTIONAL MATCH here (unlike the two below): m comes from
+    # the mandatory MATCH, so it can filter d/m directly without needing a
+    # WITH — see _action_items' comment for why that's not true everywhere.
     return (
         "MATCH (d:Decision)-[:MADE_IN]->(m:Meeting) "
+        "WHERE $meeting_id IS NULL OR m.id = $meeting_id "
         "OPTIONAL MATCH (d)-[:MADE_BY]->(p:Person) "
         "RETURN d.text AS decision, d.confidence AS confidence, p.name AS speaker, "
         "d.reason AS reason, d.evidence AS evidence, "
         "m.title AS meeting ORDER BY d.timestamp",
-        {},
+        {"meeting_id": meeting_id},
     )
 
 
-def _contradictions(_: str) -> tuple[str, dict]:
+def _contradictions(_: str, meeting_id: "str | None") -> tuple[str, dict]:
+    # See _action_items' comment: m only exists via OPTIONAL MATCH, so WHERE
+    # needs the WITH in between to filter rows instead of the match itself.
     return (
         "MATCH (current:Decision)-[r:CONTRADICTS]->(previous:Decision) "
         "OPTIONAL MATCH (current)-[:MADE_IN]->(m:Meeting) "
+        "WITH current, previous, r, m "
+        "WHERE $meeting_id IS NULL OR m.id = $meeting_id "
         "RETURN current.text AS decision, previous.text AS conflicts_with, "
         "r.message AS message, m.title AS meeting",
-        {},
+        {"meeting_id": meeting_id},
     )
 
 
-def _participants(_: str) -> tuple[str, dict]:
+def _participants(_: str, meeting_id: "str | None") -> tuple[str, dict]:
     return (
         "MATCH (p:Person)-[:PARTICIPATED_IN]->(m:Meeting) "
+        "WHERE $meeting_id IS NULL OR m.id = $meeting_id "
         "RETURN p.name AS participant, collect(m.title) AS meetings "
         "ORDER BY participant",
-        {},
+        {"meeting_id": meeting_id},
     )
 
 
-def _meetings(_: str) -> tuple[str, dict]:
+def _meetings(_: str, meeting_id: "str | None") -> tuple[str, dict]:
     return (
-        "MATCH (m:Meeting) OPTIONAL MATCH (p:Person)-[:PARTICIPATED_IN]->(m) "
+        "MATCH (m:Meeting) WHERE $meeting_id IS NULL OR m.id = $meeting_id "
+        "OPTIONAL MATCH (p:Person)-[:PARTICIPATED_IN]->(m) "
         "RETURN m.id AS id, m.title AS meeting, collect(p.name) AS participants "
         "ORDER BY meeting",
-        {},
+        {"meeting_id": meeting_id},
     )
 
 
@@ -175,7 +193,8 @@ _TEMPLATES: tuple[tuple[tuple[str, ...], QueryBuilder, str], ...] = (
     ),
     (
         ("decision", "decide", "approved", "agreement", "agreed", "resolve",
-         "resolved", "conclude", "concluded", "chose", "choose", "chosen"),
+         "resolved", "conclude", "concluded", "chose", "choose", "chosen",
+         "discuss", "discussed", "discussing", "talk about", "talked about"),
         _decisions,
         "decisions",
     ),
@@ -372,12 +391,26 @@ def ask(query: str) -> dict:
 
     builder, kind = _select_template(query)
 
-    if kind == "meetings" and settings.ask_coco_semantic_search:
-        # No fixed-intent keyword matched — before falling back to the
-        # generic "list every meeting" template, try hybrid retrieval. The
-        # four templates above are untouched by this and are still tried
-        # first on every call via _select_template; this only fires for the
-        # residual case that used to just weakly list meetings.
+    # Scope whichever template matched to a specific meeting when the query
+    # names one (_find_meeting is the same best-effort title/word-overlap
+    # matcher the summary path above already relies on). Without this, e.g.
+    # "action items in the customer feedback dashboard meeting" silently
+    # returned every action item across every meeting instead.
+    meeting = _find_meeting(query)
+    meeting_id = meeting["id"] if meeting else None
+
+    if kind == "meetings" and meeting_id:
+        # No fixed-intent keyword matched, but a specific meeting was named
+        # ("what happened in X", "tell me about X") — its decisions are a
+        # far more useful default than listing every meeting in the org.
+        builder, kind = _decisions, "decisions"
+    elif kind == "meetings" and settings.ask_coco_semantic_search:
+        # No fixed-intent keyword matched and no meeting was named either —
+        # before falling back to the generic "list every meeting" template,
+        # try hybrid retrieval. The four templates above are untouched by
+        # this and are still tried first on every call via _select_template;
+        # this only fires for the residual case that used to just weakly
+        # list meetings.
         semantic_results, semantic_citations = _semantic_expand(query)
         if semantic_results:
             answer = _synthesize_with_gemini(query, "semantic", semantic_results) or _format_answer_fallback(
@@ -390,7 +423,7 @@ def ask(query: str) -> dict:
                 "citations": semantic_citations,
             }
 
-    cypher, params = builder(query)
+    cypher, params = builder(query, meeting_id)
     try:
         results = run_query(cypher, **params)
     except Exception:
