@@ -204,6 +204,30 @@ room_id: str | None = None
 rsvp_status: str | None = None   # the CALLER's own invite status; None if they're not an invitee
 ```
 
+### `POST /meetings` — response shape
+
+Gets its own response model instead of reusing `MeetingCreateResponse` — that schema is shared
+with `POST /upload` (`meetings.py` line 42), whose caller only ever needs the bare `meeting_id`
+to start polling task status, and shouldn't have to change shape for a feature it's unrelated to.
+`create_meeting` already builds every field a `MeetingListItem` needs in memory before returning,
+so it returns one directly:
+
+```python
+@router.post("/meetings", response_model=MeetingListItem)
+def create_meeting(...) -> MeetingListItem:
+    ...  # unchanged body below
+    return MeetingListItem(
+        id=meeting.id, title=meeting.title, project=meeting.project, date=meeting.date,
+        status=meeting.status, progress=0, source=meeting.source, room_id=meeting.room_id,
+        rsvp_status="accepted",  # the organizer's own view of the meeting they just created
+    )
+```
+
+This closes a real gap the first draft of this spec left open: **Frontend components** below
+says `addMeeting()` "pushes the backend's returned meeting (real id, source, roomId) into local
+state" — but nothing upstream of that actually specified where `source`/`roomId` would come from
+if the endpoint returned only `{meeting_id}`. Caught in review, not caught in the original draft.
+
 ### `POST /meetings` — extended
 
 [backend/app/api/meetings.py](../../../backend/app/api/meetings.py) line 32. Currently takes no
@@ -347,14 +371,30 @@ not-AI-extracted visibility gap noted above, rather than leaving it as a known l
 
 ### `AppContext.tsx`
 
+- **Refetch bug, must be fixed for any of this to work multi-user:** the existing meeting-load
+  effect (the one starting around line 673, `api.listMeetings()...`) has `[]` as its dependency
+  array with an explicit `eslint-disable-next-line react-hooks/exhaustive-deps` — it runs once on
+  mount and never again. The identity-header effect right above it (line 623,
+  `api.setApiIdentity(currentUser.name)`) correctly depends on `currentUser.name`, but nothing
+  re-triggers the meetings fetch when identity changes. Confirmed by reading both effects: today,
+  `switchDemoUser()` changes who API calls are made *as*, but the `meetings` array in state stays
+  whatever was fetched for whoever was logged in at mount. This predates this spec but blocks its
+  entire premise (invitations visible to the actual invited user) and its own Testing section
+  (switching demo users to verify an invitation appears) — fixing it is in scope here, not a
+  separate ticket. Fix: extract the effect body into a `refreshMeetings()` function; run it on
+  mount, whenever `currentUser.name` changes, and after `addMeeting`/`rsvpToMeeting` succeed
+  (below) — a plain refetch, not an incremental patch, matching how `processAudioForMeeting`'s
+  own poll loop already just re-fetches rather than hand-patching state.
 - `addMeeting()` (currently pure local state, confirmed by reading it) now calls
-  `api.scheduleMeeting(...)` first; on success, pushes the *backend's* returned meeting (real id,
-  `source='scheduled'`, generated `roomId`) into local state instead of a synthesized
-  `mtg-${Date.now()}` placeholder. `CreateMeetingModal.tsx`'s submit handler needs no change
-  beyond this — it already calls `addMeeting`.
-- New `rsvpToMeeting(meetingId, status)` action: calls `api.rsvpToMeeting`, then either removes
-  the meeting from local `meetings` (on `declined`) or marks it `rsvpStatus: 'accepted'` locally
-  (on `accepted`, before navigating to the room).
+  `api.scheduleMeeting(...)` first; on success, calls `refreshMeetings()` rather than
+  hand-constructing a local placeholder — the backend response above already has everything
+  (`source`, `room_id`, `rsvp_status`), so there's no reason to duplicate that shape client-side
+  and risk it drifting from what a refetch would show anyway. `CreateMeetingModal.tsx`'s submit
+  handler needs no change beyond this — it already calls `addMeeting`.
+- New `rsvpToMeeting(meetingId, status)` action: calls `api.rsvpToMeeting`, then
+  `refreshMeetings()` — same reasoning; a declined meeting simply won't come back in the next
+  fetch (per the `GET /meetings` access-control change above), no separate local-removal path
+  to keep in sync with the server.
 
 ### `DashboardView.tsx`
 
@@ -374,6 +414,17 @@ not-AI-extracted visibility gap noted above, rather than leaving it as a known l
   filtered to `assignee.toLowerCase() === currentUser.name.toLowerCase()` (same case-insensitive
   name matching this file already uses elsewhere, e.g. `openDmWithUser`), each row linking to its
   source meeting via the existing `setSelectedMeetingId` + `setActiveTab('meetings')` pattern.
+  **Deliberately not sourced from the existing `GET /users/{user}/dashboard`**
+  ([dashboard_service.py](../../../backend/app/services/dashboard_service.py)), checked directly
+  rather than assumed: that endpoint's `action_items` come from Neo4j
+  (`ActionItem-[:ASSIGNED_TO]->Person`) but the row shape it returns —
+  `{task, deadline, priority}` — has no `meeting_id`, `id`, or `status`, all of which this
+  section needs (to link back to a meeting, key the list, and show completion state). Using it
+  would mean extending its Cypher query anyway, plus a second network round-trip on every
+  dashboard load, for data `meetings` already has in full from the fetch `AppContext` already
+  does for the dashboard's own counts. Both paths trace back to the same Gemini-extraction
+  pipeline run, which writes the same action-item list to SQL/JSON and to Neo4j together — two
+  views of one source, not two independently-derived definitions of "my tasks."
 
 ### New `InvitationCard.tsx`
 
@@ -467,12 +518,17 @@ scoped during implementation planning rather than specified line-by-line here.
   `room_id == room_name`; existing finalization tests (title/duration generation) still pass
   unchanged.
 - `POST /upload` — resulting `Meeting.source == 'upload'`.
+- `POST /meetings` response — returns a full `MeetingListItem` (not just `meeting_id`), organizer
+  `rsvp_status == 'accepted'`.
 
 **Frontend:** manual verification in the preview browser (this codebase has no existing
 component-test setup for these views) — schedule a meeting as one demo user, switch to another
-via `switchDemoUser`, confirm the invitation card appears with working Enter Room / Reject;
-confirm the Tasks stat swap, scroll-to-upcoming, and Meeting Intelligence pagination (`<`/`>`,
-page boundaries) all behave against real data before calling this done.
+via `switchDemoUser`, and **confirm the invitation card actually appears without a manual page
+refresh** (this specifically exercises the `refreshMeetings()`-on-identity-change fix above — the
+one failure mode that would make every other RSVP/visibility test in this section pass for the
+wrong reason, by coincidentally still showing stale but correct-looking state); confirm working
+Enter Room / Reject, the Tasks stat swap, scroll-to-upcoming, and Meeting Intelligence pagination
+(`<`/`>`, page boundaries) all behave against real data before calling this done.
 
 ## Out of scope
 
