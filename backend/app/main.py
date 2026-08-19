@@ -74,7 +74,6 @@ app.add_middleware(
         r"^https?://(?:localhost|127\.0\.0\.1|\[::1\]|10(?:\.\d{1,3}){3}|"
         r"192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])"
         r"(?:\.\d{1,3}){2})(?::\d+)?$"
-        r"|^https://[a-z0-9-]+\.vercel\.app$"
     ),
     allow_credentials=True,
     allow_methods=["*"],
