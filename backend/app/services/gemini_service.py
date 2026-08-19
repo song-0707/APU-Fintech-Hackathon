@@ -27,6 +27,7 @@ from app.schemas.meeting_intelligence import (
     MeetingIntelligence,
     TranscriptLine,
 )
+from app.services.gemini_client import generate_content, has_gemini_credentials
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -145,14 +146,12 @@ If you are unsure which category fits, use "Concept" rather than guessing.
 
     try:
         raw = ""
-        if settings.gemini_api_key:
-            logger.info("Running Gemini 2.0 Flash analysis...")
-            from google import genai
-            client = genai.Client(api_key=settings.gemini_api_key)
+        if has_gemini_credentials():
+            logger.info("Running Gemini analysis with %s...", settings.gemini_model)
             for attempt in range(2):
                 try:
-                    response = client.models.generate_content(
-                        model="gemini-2.0-flash",
+                    response = generate_content(
+                        model=settings.gemini_model,
                         contents=prompt,
                         config={"response_mime_type": "application/json"},
                     )
