@@ -6,7 +6,7 @@ from app.core.config import get_settings
 from app.core.exceptions import unhandled_exception_handler
 from app.core.logger import get_logger
 from app.core.middleware import log_requests
-from app.database.session import Base, SessionLocal, engine
+from app.database.session import Base, SessionLocal, engine, sync_missing_columns
 from app.graph import graph_builder
 from app.models import meeting as _meeting_models  # noqa: F401 - registers models on Base
 from app.models import employee as _employee_models  # noqa: F401 - registers models on Base
@@ -16,6 +16,7 @@ settings = get_settings()
 logger = get_logger(__name__)
 
 Base.metadata.create_all(bind=engine)
+sync_missing_columns()
 
 # Demo employee directory — mirrors mockData.ts's INITIAL_EMPLOYEES_DATA,
 # the frontend's actual login/demo-switcher roster. This is the backend's
