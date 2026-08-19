@@ -23,6 +23,7 @@ from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.graph.neo4j_service import run_query
 from app.services import embedding_service
+from app.services.gemini_client import generate_content, has_gemini_credentials
 from app.services.storage_service import StorageService
 
 logger = get_logger(__name__)
@@ -322,12 +323,9 @@ def _synthesize_with_gemini(query: str, kind: str, results: list[dict]) -> str |
     the graph — it only summarizes data this module already retrieved, so
     this can't introduce an injection/authorization risk. Returns None on
     any failure so the caller can fall back to the deterministic formatter."""
-    if not settings.gemini_api_key:
+    if not has_gemini_credentials():
         return None
     try:
-        from google import genai
-
-        client = genai.Client(api_key=settings.gemini_api_key)
         prompt = f"""You are Coco, a corporate meeting-intelligence assistant. Answer the user's
 question using ONLY the JSON data below — it was already retrieved from the
 organization's knowledge graph for exactly this question. Do not invent facts
@@ -339,7 +337,7 @@ markdown/bullet formatting.
 Question: {query}
 Data (kind={kind}): {results[:15]}
 """
-        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        response = generate_content(model=settings.gemini_model, contents=prompt)
         text = (response.text or "").strip()
         return text or None
     except Exception as exc:
