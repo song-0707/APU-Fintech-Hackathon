@@ -60,19 +60,32 @@ export const ActionItemsTable: React.FC<ActionItemsTableProps> = ({
   };
 
   const handleToggleStatus = async (item: ActionItem) => {
-    const assigneeName = getAssigneeName(item.assignee);
-    
-    // Permission check: allow assignee or logged-in active user
-    const isMyTask = assigneeName.toLowerCase() === activeUser.toLowerCase() || activeUser.toLowerCase() === globalUser.name.toLowerCase();
-
     setUpdatingId(item.id);
 
-    // Call global AppContext toggle to update state & broadcast notification to all other meeting participants
-    toggleActionItem(item.id);
+    // Cycle status for local display — 'To Do' is the canonical
+    // not-completed state (matches AppContext.toggleActionItem; the two
+    // used to disagree, one using 'In Progress' and the other 'Pending').
+    const nextStatus: ActionItem['status'] =
+      (item.status === 'Completed' || (item.status as string) === 'Done') ? 'To Do' : 'Completed';
 
-    // Cycle status for local display
-    const nextStatus: ActionItem['status'] = 
-      (item.status === 'Completed' || (item.status as string) === 'Done') ? 'In Progress' : 'Completed';
+    try {
+      // Persists to the backend (PATCH /action-items/{id}, permission-
+      // checked server-side) and broadcasts a notification to other
+      // meeting participants. Awaited — and only applied to local display
+      // on success — so a denied/failed update (e.g. the "Viewing as
+      // User" switcher below not matching whoever's actually
+      // authenticated) doesn't show "Done" for a change that didn't stick.
+      await toggleActionItem(item.id);
+    } catch (err) {
+      setToastMessage(
+        err instanceof Error && err.message.includes('403')
+          ? 'Permission Denied: only the assignee or a manager can update this task.'
+          : 'Could not update task status. Please try again.'
+      );
+      setUpdatingId(null);
+      setTimeout(() => setToastMessage(null), 3500);
+      return;
+    }
 
     const updatedItems = items.map(t => (t.id === item.id ? { ...t, status: nextStatus } : t));
     setItems(updatedItems);

@@ -44,6 +44,11 @@ interface BackendActionItem {
   assignee: string;
   deadline: string | null;
   priority: string;
+  // Computed server-side at read time from the graph (deterministic id;
+  // completed defaults false there too) — never stored in the summary
+  // JSON itself. Optional because older cached responses may lack them.
+  id?: string;
+  completed?: boolean;
 }
 
 interface BackendFlag {
@@ -286,6 +291,23 @@ export async function setNodeDisplayName(
   if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
 }
 
+/** Persists an action item's completion status. itemId must be the real
+ * backend id (BackendActionItem.id / ActionItem.id once toActionItem has
+ * mapped it) — the old `${meetingId}-action-${idx}` synthetic id the
+ * frontend used to invent doesn't correspond to anything the backend can
+ * look up. Throws (including on a 403 from an unauthorized caller — e.g.
+ * the "Viewing as User" demo switcher not matching the real signed-in
+ * identity) rather than swallowing failures, so the caller can decide
+ * whether to roll back an optimistic UI update. */
+export async function setActionItemCompleted(itemId: string, completed: boolean): Promise<void> {
+  const res = await fetch(`${API_BASE}/action-items/${encodeURIComponent(itemId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...identityHeaders() },
+    body: JSON.stringify({ completed }),
+  });
+  if (!res.ok) throw new Error(`Update action item failed: ${res.status}`);
+}
+
 export async function askCoco(query: string): Promise<BackendQueryResponse> {
   const res = await fetch(`${API_BASE}/query`, {
     method: 'POST',
@@ -381,11 +403,15 @@ function toDecision(d: BackendDecision, meetingId: string, idx: number): Decisio
 function toActionItem(a: BackendActionItem, meetingId: string, idx: number): ActionItem {
   const priority = a.priority || 'medium';
   return {
-    id: `${meetingId}-action-${idx}`,
+    // Prefer the real, backend-computed graph id (present once the backend
+    // carries this fix) — PATCH /action-items/{id} needs the real one to
+    // find the right node. Falls back to the old synthetic id only for a
+    // stale cached response that predates it, so this never throws.
+    id: a.id || `${meetingId}-action-${idx}`,
     task: a.task,
     assignee: a.assignee,
     dueDate: a.deadline || 'No deadline',
-    status: 'To Do',
+    status: a.completed ? 'Completed' : 'To Do',
     priority: (priority.charAt(0).toUpperCase() + priority.slice(1)) as 'High' | 'Medium' | 'Low',
     meetingId,
   };

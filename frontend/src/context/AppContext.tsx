@@ -479,7 +479,7 @@ interface AppContextType {
   contradictions: Contradiction[];
   actionItems: ActionItem[];
   personalDashboard: api.BackendDashboard | null;
-  toggleActionItem: (id: string) => void;
+  toggleActionItem: (id: string) => Promise<void>;
   processAudioForMeeting: (meetingId: string, file: File | { name: string; size?: number }) => void;
   deleteMeeting: (meetingId: string) => Promise<void>;
   addMeeting: (meetingData: {
@@ -810,15 +810,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
 
-  const toggleActionItem = (id: string) => {
+  /** Persists to the backend first (PATCH /action-items/{id}, permission-
+   * checked server-side against the real signed-in identity — see
+   * app/core/auth.py's require_access) and only touches local state once
+   * that succeeds, matching deleteMeeting/rsvpToMeeting below. Without
+   * this, completing a task only ever changed in-memory React state: a
+   * reload (or just the Dashboard, which reads the same meetings array)
+   * had nothing durable to reflect. Throws on failure — including a 403
+   * from ActionItemsTable's "Viewing as User" demo switcher not matching
+   * whoever's actually authenticated — so the caller can show that error
+   * instead of the UI silently claiming success.
+   *
+   * 'To Do' is the canonical not-completed status here, not 'Pending' —
+   * ActionItemsTable's own toggle logic uses the same one, and the two
+   * used to disagree. */
+  const toggleActionItem = async (id: string): Promise<void> => {
+    const current = meetings.flatMap(m => m.actionItems || []).find(item => item.id === id)
+      || actionItems.find(item => item.id === id);
+    if (!current) return;
+
+    const isDone = current.status === 'Completed';
+    const newStatus = (isDone ? 'To Do' : 'Completed') as ActionItem['status'];
+
+    await api.setActionItemCompleted(id, !isDone);
+
     let completedItem: ActionItem | null = null;
     let parentMeetingTitle = '';
 
     setActionItems(prev => prev.map(item => {
       if (item.id === id) {
-        const isDone = item.status === 'Completed';
-        const newStatus = isDone ? 'Pending' : 'Completed';
-        const updated = { ...item, status: newStatus as any };
+        const updated = { ...item, status: newStatus };
         if (!isDone) {
           completedItem = updated;
         }
@@ -831,9 +852,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (mtg.actionItems) {
         const updatedItems = mtg.actionItems.map(item => {
           if (item.id === id) {
-            const isDone = item.status === 'Completed';
-            const newStatus = isDone ? 'Pending' : 'Completed';
-            const updated = { ...item, status: newStatus as any };
+            const updated = { ...item, status: newStatus };
             if (!isDone) {
               completedItem = updated;
               parentMeetingTitle = mtg.title;
