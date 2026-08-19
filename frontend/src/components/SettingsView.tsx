@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
+import { useTheme } from '../context/ThemeContext';
 import { 
   User as UserIcon, 
   Sparkles, 
@@ -33,8 +34,12 @@ export const SettingsView: React.FC = () => {
   const [phone, setPhone] = useState(currentUser.phone || '+1 (555) 123-4567');
   const [avatarUrl, setAvatarUrl] = useState(currentUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80');
 
-  // Theme Mode State
-  const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'system'>('dark');
+  // Theme mode comes from ThemeContext (persisted to localStorage, applied
+  // on mount) instead of local state -- a local-only default here used to
+  // desync from the actual rendered theme (always started light, since
+  // nothing applied the .dark class until a click; refreshing forgot
+  // whatever was picked, since nothing persisted it).
+  const { theme: themeMode, setTheme: handleThemeChange } = useTheme();
   const [showToast, setShowToast] = useState(false);
 
   useEffect(() => {
@@ -45,21 +50,6 @@ export const SettingsView: React.FC = () => {
     setPhone(currentUser.phone || '+1 (555) 123-4567');
     setAvatarUrl(currentUser.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80');
   }, [currentUser]);
-
-  const handleThemeChange = (mode: 'light' | 'dark' | 'system') => {
-    setThemeMode(mode);
-    if (mode === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else if (mode === 'light') {
-      document.documentElement.classList.remove('dark');
-    } else {
-      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
-    }
-  };
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();

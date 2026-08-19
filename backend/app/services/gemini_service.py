@@ -27,9 +27,135 @@ from app.schemas.meeting_intelligence import (
     MeetingIntelligence,
     TranscriptLine,
 )
+from app.services.gemini_client import generate_content, has_gemini_credentials
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# Imported directly by app.api.live_meeting — both gate action items
+# extracted by the *same* Gemini prompt (this module's canonical post-call
+# pass and that file's per-minute provisional pass), so a verb missing here
+# silently drops a valid action item on one path but not the other.
+_ACTION_VERBS = (
+    "present", "prepare", "send", "submit", "review", "draft", "share",
+    "update", "complete", "create", "schedule", "follow up", "call",
+    "email", "deliver", "finalize", "confirm", "check", "fix", "build",
+    "assign", "analyze", "analyse", "brief",
+    "investigate", "research", "document", "write", "design", "implement",
+    "deploy", "test", "validate", "verify", "organize", "coordinate",
+    "arrange", "contact", "notify", "escalate", "gather", "collect",
+    "compile", "summarize", "outline", "publish", "launch", "release",
+    "roll out", "onboard", "train", "monitor", "track", "audit",
+    "negotiate", "sign", "handle", "resolve", "set up", "configure",
+    "migrate", "upgrade", "install", "reach out", "circle back",
+    "clean up", "refactor", "debug", "upload", "file", "order", "plan",
+    "host", "kick off", "wrap up", "reschedule", "reply", "respond",
+    "clarify", "consolidate",
+)
+_AGENDA_PHRASES = (
+    "going to discuss",
+    "going to talk about",
+    "discuss about the task",
+    "discuss the task",
+    "today we are going to discuss",
+)
+_STOP_ENTITY_TOKENS = {
+    "a", "an", "and", "are", "for", "in", "is", "next", "of", "on", "the",
+    "to", "we", "week", "with",
+}
+
+
+def _has_action_verb(text: str) -> bool:
+    lowered = text.lower()
+    return any(re.search(rf"\b{re.escape(verb)}\b", lowered) for verb in _ACTION_VERBS)
+
+
+def _is_agenda_statement(text: str) -> bool:
+    lowered = text.lower()
+    return any(phrase in lowered for phrase in _AGENDA_PHRASES)
+
+
+def _clean_action_task(task: str) -> str:
+    cleaned = task.strip()
+    cleaned = re.sub(r"^\s*action item\s*:\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^\s*(?:i am|i'm)\s+going\s+to\s+", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"^\s*(?:i will|i'll|we will|we'll)\s+", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"\bthe project of ([A-Za-z][A-Za-z\s-]*?) to\b", r"\1 project to", cleaned, flags=re.IGNORECASE)
+    # "" (not the raw input) once boilerplate consumes everything — safe because
+    # none of the stripped prefixes overlap an _ACTION_VERBS word, so every
+    # caller's _has_action_verb gate already rejects whatever would land here.
+    return (cleaned[:1].upper() + cleaned[1:]) if cleaned else ""
+
+
+def _entity_tokens(text: str) -> list[str]:
+    return [
+        token
+        for token in re.findall(r"[a-z0-9]+", text.lower())
+        if len(token) > 1 and token not in _STOP_ENTITY_TOKENS
+    ]
+
+
+def _entity_supported_by_transcript(entity: str, transcript_text: str, detected_names: Optional[List[str]]) -> bool:
+    entity = entity.strip()
+    if not entity:
+        return False
+    transcript_lower = transcript_text.lower()
+    detected_lower = {name.lower() for name in (detected_names or [])}
+    if entity.lower() in transcript_lower or entity.lower() in detected_lower:
+        return True
+
+    transcript_tokens = set(_entity_tokens(transcript_text))
+    tokens = _entity_tokens(entity)
+    return bool(tokens and all(token in transcript_tokens for token in tokens))
+
+
+def _speaker_names_from_transcript(transcript_text: str) -> list[str]:
+    speakers: list[str] = []
+    for line in transcript_text.split("\n"):
+        match = re.match(r"\[[^\]]+\]\s*([^:]+):", line.strip())
+        if not match:
+            continue
+        speaker = match.group(1).strip()
+        if speaker and speaker not in speakers:
+            speakers.append(speaker)
+    real_names = [name for name in speakers if name.lower() != "speaker"]
+    return real_names or speakers
+
+
+def postprocess_analysis_dict(
+    analysis: dict,
+    transcript_text: str,
+    detected_names: Optional[List[str]] = None,
+) -> dict:
+    """Drop weak or unsupported extractions before they become graph nodes."""
+    cleaned = dict(analysis)
+
+    action_items = []
+    for item in cleaned.get("action_items") or []:
+        if not isinstance(item, dict):
+            continue
+        task = _clean_action_task(str(item.get("task") or ""))
+        if not task or _is_agenda_statement(task) or not _has_action_verb(task):
+            continue
+        next_item = dict(item)
+        next_item["task"] = task
+        action_items.append(next_item)
+    cleaned["action_items"] = action_items[:5]
+
+    triples = []
+    for triple in cleaned.get("knowledge_triples") or []:
+        if not isinstance(triple, dict):
+            continue
+        subject = str(triple.get("subject") or "")
+        obj = str(triple.get("object") or "")
+        if (
+            _entity_supported_by_transcript(subject, transcript_text, detected_names)
+            and _entity_supported_by_transcript(obj, transcript_text, detected_names)
+        ):
+            triples.append(triple)
+    cleaned["knowledge_triples"] = triples[:12]
+
+    return cleaned
 
 
 def parse_analysis_response(raw: str) -> MeetingAnalysis:
@@ -97,6 +223,15 @@ From the transcript, extract a concise summary, decisions, action items,
 risks, and factual knowledge triples. Decision confidence must be one of
 "firm_commitment" | "soft_agreement" | "unresolved".
 
+Action-item rules:
+- Only create an action item when a speaker clearly commits to concrete future work.
+- Do not create action items from agenda/topic statements like
+  "today we are going to discuss the task next week".
+- Normalize first-person commitments into task text. For example,
+  "I am going to present the project of customer feedback to CEO next week"
+  should become "Present customer feedback project to CEO next week".
+- Do not include filler, duplicated words, or partial ASR fragments in task text.
+
 For each knowledge triple's subject and object, classify it with a
 subject_type/object_type from this FIXED list — do not invent any other
 category:
@@ -108,6 +243,8 @@ category:
   "Document"      — a contract, report, or file
   "Concept"       — anything else: an idea, risk, topic, or activity
 If you are unsure which category fits, use "Concept" rather than guessing.
+Only emit knowledge triples for entities explicitly supported by transcript
+words or detected participant names. Do not invent model/system names.
 
 **Meeting Transcript:**
 {transcript_text}
@@ -145,18 +282,17 @@ If you are unsure which category fits, use "Concept" rather than guessing.
 
     try:
         raw = ""
-        if settings.gemini_api_key:
-            logger.info("Running Gemini 2.0 Flash analysis...")
-            from google import genai
-            client = genai.Client(api_key=settings.gemini_api_key)
+        if has_gemini_credentials():
+            logger.info("Running Gemini analysis with %s...", settings.gemini_model)
             for attempt in range(2):
                 try:
-                    response = client.models.generate_content(
-                        model="gemini-2.0-flash",
+                    response = generate_content(
+                        model=settings.gemini_model,
                         contents=prompt,
                         config={"response_mime_type": "application/json"},
                     )
-                    return parse_analysis_response(response.text).model_dump()
+                    analysis = parse_analysis_response(response.text).model_dump()
+                    return postprocess_analysis_dict(analysis, transcript_text, detected_names)
                 except Exception as gemini_ex:
                     logger.warning(
                         "Gemini analysis attempt %s/2 failed validation or request: %s",
@@ -170,7 +306,8 @@ If you are unsure which category fits, use "Concept" rather than guessing.
             raw = call_agnes_api(messages, model="agnes-2.0-flash")
 
         if raw:
-            return parse_analysis_response(raw).model_dump()
+            analysis = parse_analysis_response(raw).model_dump()
+            return postprocess_analysis_dict(analysis, transcript_text, detected_names)
         raise ValueError("No meeting-intelligence API is configured")
     except Exception as e:
         logger.warning(f"AI analysis failed: {e}. Using fallback extraction.")
@@ -180,7 +317,7 @@ If you are unsure which category fits, use "Concept" rather than guessing.
 def fallback_analysis(transcript_text: str, detected_names: Optional[List[str]] = None) -> dict:
     """Keyword-heuristic extraction when Gemini/Agnes both fail (rate limits,
     quota, network)."""
-    participants = list(set(detected_names)) if detected_names else ["Speaker"]
+    participants = list(dict.fromkeys(detected_names or [])) or _speaker_names_from_transcript(transcript_text) or ["Speaker"]
     decisions = []
     action_items = []
 
@@ -200,10 +337,14 @@ def fallback_analysis(transcript_text: str, detected_names: Optional[List[str]] 
         l_lower = txt.lower()
         if any(w in l_lower for w in ["decide", "agree", "confirm", "approve", "settle", "must", "wise", "compulsory"]):
             decisions.append({"text": txt, "confidence": "firm_commitment", "timestamp": ts, "speaker": spk})
-        elif any(w in l_lower for w in ["action", "task", "todo", "post", "send", "submit", "check", "need to"]):
-            action_items.append({"task": txt, "assignee": spk, "deadline": "End of week", "priority": "high"})
+        elif (
+            not _is_agenda_statement(txt)
+            and re.search(r"\b(action item|i will|i'll|i am going to|i'm going to|we will|we'll|need to|needs to|please)\b", l_lower)
+            and _has_action_verb(txt)
+        ):
+            action_items.append({"task": _clean_action_task(txt), "assignee": spk, "deadline": "End of week", "priority": "high"})
 
-    return {
+    return postprocess_analysis_dict({
         "summary": "Meeting transcript processed with deterministic fallback extraction.",
         "participants": participants,
         "speaker_map": {},
@@ -211,7 +352,7 @@ def fallback_analysis(transcript_text: str, detected_names: Optional[List[str]] 
         "action_items": action_items[:5],
         "risks": [],
         "knowledge_triples": [],
-    }
+    }, transcript_text, detected_names)
 
 
 # ── Demo mode — canned scenario, zero API calls ────────────────────────────
