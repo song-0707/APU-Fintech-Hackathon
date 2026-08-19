@@ -1,4 +1,17 @@
 import os
+import tempfile
+
+# Must happen before anything imports app.database.session — engine/SessionLocal
+# are created once at that module's import time from settings.database_url, and
+# Settings() is @lru_cache'd, so this is the only point that can redirect it.
+# Without this, tests that call SessionLocal() directly (Celery-task-style code
+# such as app.api.live_meeting / app.tasks.meeting_tasks, which have no FastAPI
+# request to inject an overridden get_db() into — see db_session fixture below)
+# fall through to whatever DATABASE_URL backend/.env has configured, permanently
+# writing test rows into a real local/demo database on every run.
+_test_db_fd, _test_db_path = tempfile.mkstemp(suffix=".db", prefix="corporate_brain_test_")
+os.close(_test_db_fd)
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{_test_db_path}")
 
 os.environ.setdefault("GEMINI_API_KEY", "test-key")
 os.environ.setdefault("NEO4J_PASSWORD", "test-password")
