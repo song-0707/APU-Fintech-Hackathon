@@ -106,6 +106,16 @@ def _action_items(query: str, meeting_ids: "set[str] | None") -> tuple[str, dict
     cypher = (
         "MATCH (a:ActionItem)-[:ASSIGNED_TO]->(p:Person) "
         "OPTIONAL MATCH (a)-[:MADE_IN]->(m:Meeting) "
+        # The WITH here is load-bearing, not stylistic: a WHERE clause
+        # written directly after an OPTIONAL MATCH is folded into that
+        # match's own predicate in Cypher, not applied as a row filter --
+        # so without this WITH, an action item whose real meeting fails
+        # the $meeting_ids check doesn't get excluded, it gets returned
+        # with m silently nulled out instead, leaking its task/assignee
+        # text past the access-control scope this file's docstring
+        # promises. _semantic_expand's Cypher already uses this same WITH
+        # pattern for its own OPTIONAL MATCH; this mirrors it.
+        "WITH a, p, m "
         "WHERE ($person IS NULL OR toLower(p.name) = toLower($person)) "
         "AND ($meeting_ids IS NULL OR m.id IN $meeting_ids) "
         "RETURN a.task AS task, p.name AS assignee, a.deadline AS deadline, "
@@ -120,7 +130,7 @@ def _decisions(_: str, meeting_ids: "set[str] | None") -> tuple[str, dict]:
         "WHERE $meeting_ids IS NULL OR m.id IN $meeting_ids "
         "OPTIONAL MATCH (d)-[:MADE_BY]->(p:Person) "
         "RETURN d.text AS decision, d.confidence AS confidence, p.name AS speaker, "
-        "d.reason AS reason, d.evidence AS evidence, "
+        "d.reason AS reason, d.evidence AS evidence, d.timestamp AS timestamp, "
         "m.title AS meeting ORDER BY d.timestamp",
         {"meeting_ids": _meeting_ids_param(meeting_ids)},
     )
@@ -138,7 +148,8 @@ def _contradictions(_: str, meeting_ids: "set[str] | None") -> tuple[str, dict]:
         "OR (currentMeeting.id IN $meeting_ids AND previousMeeting.id IN $meeting_ids) "
         "OPTIONAL MATCH (current)-[:MADE_BY]->(p:Person) "
         "RETURN current.text AS decision, previous.text AS conflicts_with, "
-        "r.message AS message, currentMeeting.title AS meeting",
+        "r.message AS message, p.name AS speaker, current.timestamp AS timestamp, "
+        "currentMeeting.title AS meeting",
         {"meeting_ids": _meeting_ids_param(meeting_ids)},
     )
 
@@ -173,8 +184,18 @@ def _semantic_expand(query: str, meeting_ids: "set[str] | None", n_results: int 
     also within meeting_ids (or the caller is management) — the hit set
     from vector search alone doesn't guarantee that, since a contradiction
     by definition can point at a decision from a different meeting than the
-    one that matched the search."""
+    one that matched the search.
+
+    The matched transcript lines themselves (not just which meeting they
+    belong to) are also kept, as "snippet" rows -- a fact someone mentioned
+    in passing that never became a Decision/ActionItem/Contradiction node
+    would otherwise be findable by this search yet unanswerable, since the
+    Cypher expansion below only ever surfaces graph nodes. Only raw
+    transcript lines (type == "transcript") are kept this way -- the
+    summary/action_item/risk/graph_node snippets in the same collection
+    duplicate what the graph expansion already covers."""
     hit_meeting_ids: set[str] = set()
+    snippet_candidates: list[tuple[str, dict, str]] = []
 
     try:
         decision_hits = embedding_service.query_similar_decisions(
@@ -189,14 +210,46 @@ def _semantic_expand(query: str, meeting_ids: "set[str] | None", n_results: int 
         if hit["distance"] <= _SEMANTIC_DISTANCE_THRESHOLD and hit.get("meeting_id"):
             hit_meeting_ids.add(hit["meeting_id"])
 
+    documents = (snippet_hits.get("documents") or [[]])[0]
     metadatas = (snippet_hits.get("metadatas") or [[]])[0]
     distances = (snippet_hits.get("distances") or [[]])[0]
-    for meta, dist in zip(metadatas, distances):
-        if dist <= _SEMANTIC_DISTANCE_THRESHOLD and meta.get("meeting_id"):
-            hit_meeting_ids.add(meta["meeting_id"])
+    for doc, meta, dist in zip(documents, metadatas, distances):
+        if dist > _SEMANTIC_DISTANCE_THRESHOLD or not meta.get("meeting_id"):
+            continue
+        hit_meeting_ids.add(meta["meeting_id"])
+        if _looks_like_transcript_snippet(meta):
+            snippet_candidates.append((meta["meeting_id"], meta, doc))
 
     if not hit_meeting_ids:
         return [], []
+
+    # Snippet speaker labels come straight from per-line diarization
+    # metadata, never through graph_builder's Person-node merging -- so a
+    # shortened variant ("KAM") can surface as if it were a different
+    # person from the fuller name ("KAM XIN LE") used everywhere else for
+    # the same speaker in the same meeting. Resolve against that meeting's
+    # real, already-canonical participant list before building snippet_rows.
+    participants_by_meeting: dict[str, list[str]] = {}
+    if snippet_candidates:
+        try:
+            participant_rows = run_query(
+                "MATCH (p:Person)-[:PARTICIPATED_IN]->(m:Meeting) WHERE m.id IN $ids "
+                "RETURN m.id AS meeting_id, collect(DISTINCT p.name) AS participants",
+                ids=list(hit_meeting_ids),
+            )
+            participants_by_meeting = {row["meeting_id"]: row["participants"] or [] for row in participant_rows}
+        except Exception as exc:
+            logger.warning("Ask Coco: participant lookup for speaker resolution failed: %s", exc)
+
+    snippet_rows: list[dict] = [
+        {
+            "meeting": meta.get("meeting_title") or meta.get("source") or "",
+            "snippet": meta.get("full_text") or doc,
+            "speaker": _resolve_speaker(meta.get("speaker") or "", participants_by_meeting.get(meeting_id, [])),
+            "timestamp": meta.get("timestamp") or "",
+        }
+        for meeting_id, meta, doc in snippet_candidates
+    ]
 
     results = run_query(
         "MATCH (m:Meeting) WHERE m.id IN $hit_ids "
@@ -208,12 +261,13 @@ def _semantic_expand(query: str, meeting_ids: "set[str] | None", n_results: int 
         "WHERE other IS NULL OR $meeting_ids IS NULL OR otherMeeting.id IN $meeting_ids "
         "RETURN m.title AS meeting, pr.name AS project, "
         "d.text AS decision, d.reason AS reason, d.evidence AS evidence, "
-        "d.confidence AS confidence, p.name AS speaker, "
+        "d.confidence AS confidence, d.timestamp AS timestamp, p.name AS speaker, "
         "other.text AS contradicts, c.message AS contradiction_message "
         "ORDER BY m.date DESC",
         hit_ids=list(hit_meeting_ids),
         meeting_ids=_meeting_ids_param(meeting_ids),
     )
+    results = _rank_by_relevance(query, results + snippet_rows, ("decision", "reason", "evidence", "snippet"))
     return results, _citations_for("semantic", results)
 
 
@@ -245,6 +299,100 @@ _TEMPLATES: tuple[tuple[tuple[str, ...], QueryBuilder, str], ...] = (
         "participants",
     ),
 )
+
+
+def _keyword_hit(keyword: str, lowered_query: str) -> bool:
+    """Boundary-anchored at the *start* only (`\\bkeyword`, not
+    `\\bkeyword\\b`) so the plain suffix/plural forms this keyword list
+    relies on (decision -> decisions, contradiction -> contradictions,
+    assign -> assigned/assignee) still match, while a keyword can no
+    longer match buried mid-word. The old bare `keyword in lowered_query`
+    substring check let the action-item keyword "action" match inside
+    "satisfaction", misrouting a decision question to the action-items
+    template."""
+    return re.search(rf"\b{re.escape(keyword)}", lowered_query) is not None
+
+
+_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "but", "for", "of", "to", "in", "on",
+    "at", "by", "with", "about", "what", "which", "who", "whom", "was",
+    "were", "is", "are", "did", "does", "do", "team", "meeting", "made",
+    "that", "this", "from", "into", "be", "been", "will", "would",
+    "should", "any",
+})
+
+
+def _content_tokens(text: str) -> set[str]:
+    return {
+        w for w in re.findall(r"[a-z0-9]+", text.lower())
+        if len(w) > 2 and w not in _STOPWORDS
+    }
+
+
+def _rank_by_relevance(query: str, results: list[dict], fields: tuple[str, ...]) -> list[dict]:
+    """The four keyword templates fetch every row of their node type across
+    every accessible meeting -- they have no topical filter of their own.
+    Left as-is, a question about one specific decision cites every
+    unrelated decision in the org just because they're the same node type.
+    Re-rank by shared content words with the query and drop rows with zero
+    overlap once at least one row is relevant; fall back to the original
+    order when the query has no scorable tokens or nothing scores, so a
+    real retrieval never ends up with empty citations."""
+    q_tokens = _content_tokens(query)
+    if not q_tokens:
+        return results
+    scored = [
+        (len(q_tokens & _content_tokens(" ".join(str(row.get(f) or "") for f in fields))), row)
+        for row in results
+    ]
+    relevant = sorted((pair for pair in scored if pair[0] > 0), key=lambda pair: pair[0], reverse=True)
+    return [row for _, row in relevant] or results
+
+
+def _resolve_speaker(raw_speaker: str, participants: list[str]) -> str:
+    """A raw per-line transcript speaker label comes straight from
+    diarization/per-utterance attribution, not from a Person node, so it
+    never goes through graph_builder's _normalize_key merging and can land
+    as a shortened variant ("KAM") that reads as a different person from
+    the fuller name ("KAM XIN LE") used everywhere else for the same
+    speaker in the same meeting. Resolve it against that meeting's real
+    participant list (already canonical, from Person nodes) only when
+    exactly one participant contains it -- an ambiguous or absent match
+    leaves the raw label untouched rather than risk attributing a quote to
+    the wrong person."""
+    if not raw_speaker:
+        return raw_speaker
+    raw_lower = raw_speaker.strip().lower()
+    matches = [p for p in participants if p and raw_lower in p.lower()]
+    if len(matches) == 1 and matches[0].lower() != raw_lower:
+        return matches[0]
+    return raw_speaker
+
+
+def _looks_like_transcript_snippet(meta: dict) -> bool:
+    """A raw transcript line, not a summary/action-item/risk/graph-node
+    snippet from the same Chroma collection. Current entries carry
+    `type == "transcript"` directly; meetings indexed before that metadata
+    field existed have no `type` key at all, so those are still accepted
+    as long as they have the shape only a transcript line has -- a real
+    speaker and an in-meeting timestamp, and not a summary blob
+    (identifiable by its fixed "SUMMARY FOR:" prefix regardless of when it
+    was indexed)."""
+    snippet_type = meta.get("type")
+    if snippet_type is not None:
+        return snippet_type == "transcript"
+    return (
+        bool(meta.get("speaker"))
+        and bool(meta.get("timestamp"))
+        and not (meta.get("full_text") or "").startswith("SUMMARY FOR:")
+    )
+
+
+_RELEVANCE_FIELDS: dict[str, tuple[str, ...]] = {
+    "decisions": ("decision", "reason", "evidence"),
+    "action_items": ("task",),
+    "contradictions": ("decision", "conflicts_with", "message"),
+}
 
 
 def _find_meeting(query: str, meeting_ids: "set[str] | None") -> dict | None:
@@ -287,7 +435,7 @@ def _meeting_summary_text(meeting_id: str) -> str | None:
 def _select_template(query: str) -> tuple[QueryBuilder, str]:
     lowered = query.lower()
     for keywords, builder, kind in _TEMPLATES:
-        if any(keyword in lowered for keyword in keywords):
+        if any(_keyword_hit(keyword, lowered) for keyword in keywords):
             return builder, kind
     return _meetings, "meetings"
 
@@ -322,6 +470,10 @@ def _format_answer_fallback(kind: str, results: list[dict]) -> str:
                 speaker = f" ({row['speaker']})" if row.get("speaker") else ""
                 reason = f" — {row['reason']}" if row.get("reason") else ""
                 lines.append(f"{row['decision']}{speaker} in {row.get('meeting')}{reason}")
+            elif row.get("snippet"):
+                speaker = f" ({row['speaker']})" if row.get("speaker") else ""
+                ts = f" [{row['timestamp']}]" if row.get("timestamp") else ""
+                lines.append(f"\"{row['snippet']}\"{speaker}{ts} in {row.get('meeting')}")
             else:
                 lines.append(f"Relevant meeting: {row.get('meeting')}")
         else:
@@ -347,7 +499,7 @@ def _citations_for(kind: str, results: list[dict]) -> list[dict]:
         elif kind == "decisions":
             citations.append({
                 "filename": row.get("meeting") or "",
-                "timestamp": "",
+                "timestamp": row.get("timestamp") or "",
                 "speaker": row.get("speaker") or "",
                 "excerpt": row.get("decision") or "",
             })
@@ -361,16 +513,23 @@ def _citations_for(kind: str, results: list[dict]) -> list[dict]:
         elif kind == "contradictions":
             citations.append({
                 "filename": row.get("meeting") or "",
-                "timestamp": "",
-                "speaker": "",
+                "timestamp": row.get("timestamp") or "",
+                "speaker": row.get("speaker") or "",
                 "excerpt": f'"{row.get("decision")}" vs. "{row.get("conflicts_with")}" — {row.get("message") or ""}',
             })
         elif kind == "semantic" and row.get("decision"):
             citations.append({
                 "filename": row.get("meeting") or "",
-                "timestamp": "",
+                "timestamp": row.get("timestamp") or "",
                 "speaker": row.get("speaker") or "",
                 "excerpt": row.get("decision") or "",
+            })
+        elif kind == "semantic" and row.get("snippet"):
+            citations.append({
+                "filename": row.get("meeting") or "",
+                "timestamp": row.get("timestamp") or "",
+                "speaker": row.get("speaker") or "",
+                "excerpt": row.get("snippet") or "",
             })
         # participants/meetings are directory listings, not a claim that
         # needs a specific source quoted back — no citations for those.
@@ -453,13 +612,38 @@ def ask(query: str, meeting_ids: "set[str] | None" = None) -> dict:
 
     builder, kind = _select_template(query)
 
+    named_meeting = None
+    if kind in ("decisions", "action_items", "meetings"):
+        # A query naming a real, accessible meeting ("... in the customer
+        # feedback dashboard meeting") must be scoped to that meeting
+        # directly, not left to post-hoc relevance ranking (for the two
+        # Cypher templates) or the vector search's own open-ended
+        # meeting-matching (for "meetings"/semantic below) -- an unrelated
+        # meeting's fact or transcript line can coincidentally resemble the
+        # named meeting closely enough to be pulled in too (e.g. a
+        # different meeting's aside about "the customer feedback project"
+        # scoring within the semantic threshold for a "customer feedback
+        # dashboard" query). _find_meeting is already scoped to the
+        # caller's accessible meetings, so this can only narrow, never
+        # expand, access.
+        try:
+            named_meeting = _find_meeting(query, meeting_ids)
+        except Exception as exc:
+            logger.warning("Ask Coco: meeting-name lookup failed, skipping scoping: %s", exc)
+            named_meeting = None
+        if named_meeting:
+            meeting_ids = {named_meeting["id"]}
+
     if kind == "meetings":
         # No fixed-intent keyword matched -- before falling back to the
         # generic "list every meeting" template, try scoped vector
         # retrieval. The four templates above are untouched by this and are
         # still tried first on every call via _select_template; this only
         # fires for the residual case that used to just weakly list
-        # meetings.
+        # meetings. meeting_ids may already be narrowed to one specific
+        # meeting above, in which case both Chroma queries inside
+        # _semantic_expand are scoped to it directly (they already accept
+        # meeting_ids for access-control; this reuses that same parameter).
         semantic_results, semantic_citations = _semantic_expand(query, meeting_ids)
         if semantic_results:
             answer = _synthesize_with_gemini(query, semantic_results) or _format_answer_fallback(
@@ -490,6 +674,17 @@ def ask(query: str, meeting_ids: "set[str] | None" = None) -> dict:
             "cypher": cypher,
             "citations": [],
         }
+
+    relevance_fields = _RELEVANCE_FIELDS.get(kind)
+    if relevance_fields and not named_meeting:
+        # Once the Cypher is already scoped to one specific named meeting,
+        # every row is relevant by construction -- re-ranking by token
+        # overlap with the query on top of that would only drop genuine
+        # same-meeting facts whose own text doesn't happen to repeat words
+        # from the query (e.g. a broad "action items in meeting X" query
+        # sharing no words with a specific task like "Confirm the 6-hour
+        # refresh"). Ranking exists to compensate for the *unscoped* case.
+        results = _rank_by_relevance(query, results, relevance_fields)
 
     answer = _synthesize_with_gemini(query, results) or _format_answer_fallback(kind, results)
 
