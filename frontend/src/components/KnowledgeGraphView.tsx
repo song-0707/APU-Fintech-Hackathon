@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { GraphData, GraphNode, Meeting } from '../types';
 import { useApp } from '../context/AppContext';
+import { useTheme } from '../context/ThemeContext';
 import * as api from '../services/api';
 import {
   Filter,
@@ -86,30 +87,6 @@ function endpointId(endpoint: string | { id?: string } | null | undefined): stri
   return typeof endpoint === 'string' ? endpoint : endpoint.id || '';
 }
 
-// The app's dark mode toggle (SettingsView) flips a `.dark` class on
-// <html> for Tailwind's `dark:` variant to key off — there's no wired-up
-// ThemeContext/useTheme to read from instead (that file exists but no
-// <ThemeProvider> renders anywhere). The graph nodes below are drawn with
-// raw Canvas2D, which can't see Tailwind classes at all, so this mirrors
-// the same `.dark` class via a MutationObserver to pick matching colors,
-// including live updates if the user toggles theme while the graph is open.
-function useIsDarkMode(): boolean {
-  const [isDark, setIsDark] = useState(
-    () => typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-  );
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const update = () => setIsDark(root.classList.contains('dark'));
-    update();
-    const observer = new MutationObserver(update);
-    observer.observe(root, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, []);
-
-  return isDark;
-}
-
 export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   data,
   meetings,
@@ -119,7 +96,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   const { sendDirectMessage } = useApp();
   const fgRef = useRef<any>();
   const containerRef = useRef<HTMLDivElement>(null);
-  const isDark = useIsDarkMode();
+  const { isDark } = useTheme();
 
   // react-force-graph-2d's own auto-sizing measures the container on mount
   // and doesn't reliably react to CSS-driven size changes (e.g. this box's
