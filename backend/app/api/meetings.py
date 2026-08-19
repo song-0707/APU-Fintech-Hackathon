@@ -19,6 +19,7 @@ from app.schemas.meeting import (
     MeetingCreateResponse,
     MeetingListItem,
     MeetingStatusResponse,
+    RsvpRequest,
 )
 from app.services import brief_service, embedding_service
 from app.services.storage_service import StorageService
@@ -76,6 +77,21 @@ def create_meeting(
         status=meeting.status, progress=0, source=meeting.source, room_id=meeting.room_id,
         rsvp_status="accepted",
     )
+
+
+@router.post("/meetings/{meeting_id}/rsvp", status_code=204)
+def set_rsvp(
+    meeting_id: str,
+    payload: RsvpRequest,
+    db: Session = Depends(get_db),
+    caller: Employee = Depends(get_current_employee),
+) -> Response:
+    invite = db.query(MeetingInvite).filter_by(meeting_id=meeting_id, employee_id=caller.id).first()
+    if invite is None:
+        raise HTTPException(status_code=404, detail="No invitation found for this meeting")
+    invite.rsvp_status = payload.status
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.post("/upload", response_model=MeetingCreateResponse, status_code=202)

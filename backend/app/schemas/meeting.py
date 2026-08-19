@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -33,3 +35,7 @@ class MeetingListItem(BaseModel):
     source: str | None = None
     room_id: str | None = None
     rsvp_status: str | None = None
+
+
+class RsvpRequest(BaseModel):
+    status: Literal["accepted", "declined"]
