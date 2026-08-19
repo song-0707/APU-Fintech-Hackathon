@@ -374,7 +374,7 @@ def ask(query: str) -> dict:
 
     builder, kind = _select_template(query)
 
-    if kind == "meetings":
+    if kind == "meetings" and settings.ask_coco_semantic_search:
         # No fixed-intent keyword matched — before falling back to the
         # generic "list every meeting" template, try hybrid retrieval. The
         # four templates above are untouched by this and are still tried
