@@ -295,10 +295,11 @@ def _verify_token(token: str, room_name: str) -> tuple[str, str]:
 
 
 def _create_meeting_from_session(room_name: str, started_at: datetime, segments: list[dict]) -> str:
-    """Finalization metadata: no new Meeting columns needed — reuses the
-    existing nullable date/duration fields, and generates a distinguishing
-    title so repeated calls in the same default 'team-sync' room don't all
-    look identical in Meeting Intelligence."""
+    """Finalization metadata: reuses the existing nullable date/duration
+    fields, and generates a distinguishing title so repeated calls in the
+    same default 'team-sync' room don't all look identical in Meeting
+    Intelligence. Tagged source='live'/room_id=room_name so cards can show
+    the room ID as the headline instead of this generated title."""
     ended_at = datetime.now(timezone.utc)
     elapsed = max(0, int((ended_at - started_at).total_seconds()))
     h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
@@ -313,6 +314,8 @@ def _create_meeting_from_session(room_name: str, started_at: datetime, segments:
             duration=duration,
             file_path=None,
             status="pending",
+            source="live",
+            room_id=room_name,
         )
         db.add(meeting)
         db.commit()
