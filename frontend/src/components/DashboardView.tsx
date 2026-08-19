@@ -57,7 +57,11 @@ export const DashboardView: React.FC = () => {
   const myTasks = useMemo(() => {
     return meetings.flatMap(m =>
       (m.actionItems || [])
-        .filter(item => item.assignee.toLowerCase() === currentUser.name.toLowerCase())
+        .filter(item =>
+          item.assignee.toLowerCase() === currentUser.name.toLowerCase() &&
+          item.status !== 'Completed' &&
+          (item.status as string) !== 'Done'
+        )
         .map(item => ({ item, meeting: m }))
     );
   }, [meetings, currentUser.name]);
