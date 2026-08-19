@@ -896,6 +896,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             decisions_count: 0,
             action_items_count: 0,
             flags_count: 0,
+            // Not returned by the status-polling endpoint, but this poll
+            // only ever runs for a file this same call just uploaded --
+            // file.name is the real filename the backend just persisted.
+            audio_filename: file.name,
           };
 
           if (taskStatus.status === 'completed') {

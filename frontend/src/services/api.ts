@@ -22,6 +22,7 @@ export interface BackendMeetingListItem {
   decisions_count: number;
   action_items_count: number;
   flags_count: number;
+  audio_filename: string | null;
 }
 
 interface BackendDecision {
@@ -492,7 +493,14 @@ export function mergeBackendIntoMeeting(
     actionItems: summary ? summary.action_items.map((a, i) => toActionItem(a, base.id, i)) : base.actionItems || [],
     transcript: transcript ? toTranscript(transcript.transcript, base.id) : base.transcript || [],
     contradictions: summary ? summary.flags.map((f, i) => toContradiction(f, base as any, i)) : base.contradictions || [],
-    audioFileName: base.audioFileName,
+    // The backend now persists/returns the real filename (set only when a
+    // meeting was actually created via file upload -- see meetings.py's
+    // /upload endpoint and Meeting.file_path). Prefer it over `base`, which
+    // was previously the only source: a client-local, session-only value
+    // set optimistically at upload time that reverted to nothing on any
+    // full reload, showing "Awaiting Audio Recording" on meetings that were
+    // in fact long since fully processed.
+    audioFileName: item.audio_filename ?? base.audioFileName,
     fileSize: base.fileSize,
     completedAt: base.completedAt,
     graphData: graphData ? toGraphData(graphData) : base.graphData,
@@ -511,5 +519,6 @@ export function backendListItemToMeeting(item: BackendMeetingListItem): Meeting 
     actionItems: [],
     transcript: [],
     contradictions: [],
+    audioFileName: item.audio_filename ?? undefined,
   };
 }

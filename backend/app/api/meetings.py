@@ -174,6 +174,13 @@ def list_meetings(
             decisions_count=len(summary.get("decisions", [])) if summary else 0,
             action_items_count=len(summary.get("action_items", [])) if summary else 0,
             flags_count=len(summary.get("flags", [])) if summary else 0,
+            # file_path is the storage-relative path (e.g. "raw/<id>/foo.mp4"),
+            # set only by the upload endpoint above -- meetings created via
+            # POST /meetings (schedule-now-upload-later) or without ever
+            # going through a file upload genuinely have none, and that's
+            # real: no source recording exists for them, not just "not
+            # loaded yet".
+            audio_filename=Path(meeting.file_path).name if meeting.file_path else None,
         ))
     return items
 
