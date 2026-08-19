@@ -46,9 +46,15 @@ _SEMANTIC_DISTANCE_THRESHOLD = 0.8
 # text) — so "summarize X" can't be answered by any Cypher template at all
 # and needs its own lookup path: find which meeting is meant, then read its
 # stored summary file instead of querying the graph for it.
+#
+# Deliberately narrow: "what happened in X"/"what was discussed" used to be
+# in here too, but that routed them to this flat, single-blob, no-citation
+# summary instead of the decisions template below (which has per-decision
+# speaker+timestamp citations, and now handles meeting-scoping — see
+# _find_meeting usage in ask()). Keeping only the words that actually mean
+# "give me one condensed paragraph" rather than "tell me what was decided".
 _SUMMARY_KEYWORDS = (
     "summarize", "summarise", "summary", "recap", "overview", "brief me",
-    "what happened in", "what was discussed",
 )
 
 QueryBuilder = Callable[[str, "str | None"], tuple[str, dict]]
@@ -94,7 +100,7 @@ def _decisions(_: str, meeting_id: "str | None") -> tuple[str, dict]:
         "WHERE $meeting_id IS NULL OR m.id = $meeting_id "
         "OPTIONAL MATCH (d)-[:MADE_BY]->(p:Person) "
         "RETURN d.text AS decision, d.confidence AS confidence, p.name AS speaker, "
-        "d.reason AS reason, d.evidence AS evidence, "
+        "d.reason AS reason, d.evidence AS evidence, d.timestamp AS timestamp, "
         "m.title AS meeting ORDER BY d.timestamp",
         {"meeting_id": meeting_id},
     )
@@ -109,7 +115,7 @@ def _contradictions(_: str, meeting_id: "str | None") -> tuple[str, dict]:
         "WITH current, previous, r, m "
         "WHERE $meeting_id IS NULL OR m.id = $meeting_id "
         "RETURN current.text AS decision, previous.text AS conflicts_with, "
-        "r.message AS message, m.title AS meeting",
+        "r.message AS message, current.timestamp AS timestamp, m.title AS meeting",
         {"meeting_id": meeting_id},
     )
 
@@ -168,7 +174,7 @@ def _semantic_expand(query: str, n_results: int = 5) -> tuple[list[dict], list[d
         "OPTIONAL MATCH (m)-[:RELATES_TO]->(pr:Project) "
         "RETURN m.title AS meeting, pr.name AS project, "
         "d.text AS decision, d.reason AS reason, d.evidence AS evidence, "
-        "d.confidence AS confidence, p.name AS speaker, "
+        "d.confidence AS confidence, p.name AS speaker, d.timestamp AS timestamp, "
         "other.text AS contradicts, c.message AS contradiction_message "
         "ORDER BY m.date DESC",
         meeting_ids=list(meeting_ids),
@@ -306,7 +312,7 @@ def _citations_for(kind: str, results: list[dict]) -> list[dict]:
         elif kind == "decisions":
             citations.append({
                 "filename": row.get("meeting") or "",
-                "timestamp": "",
+                "timestamp": row.get("timestamp") or "",
                 "speaker": row.get("speaker") or "",
                 "excerpt": row.get("decision") or "",
             })
@@ -320,14 +326,14 @@ def _citations_for(kind: str, results: list[dict]) -> list[dict]:
         elif kind == "contradictions":
             citations.append({
                 "filename": row.get("meeting") or "",
-                "timestamp": "",
+                "timestamp": row.get("timestamp") or "",
                 "speaker": "",
                 "excerpt": f'"{row.get("decision")}" vs. "{row.get("conflicts_with")}" — {row.get("message") or ""}',
             })
         elif kind == "semantic" and row.get("decision"):
             citations.append({
                 "filename": row.get("meeting") or "",
-                "timestamp": "",
+                "timestamp": row.get("timestamp") or "",
                 "speaker": row.get("speaker") or "",
                 "excerpt": row.get("decision") or "",
             })
