@@ -181,7 +181,7 @@ export const MeetingRecorder: React.FC<{
       <Square className="h-5 w-5 fill-current" /><span>Stop {minutes}:{seconds}</span>
     </button>
   ) : (
-    <button type="button" onClick={() => void startRecording()} className={`${buttonClass} bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700`} title="Select this browser tab to record only the meeting area">
+    <button type="button" onClick={() => void startRecording()} className={`${buttonClass} bg-slate-100 text-slate-700 hover:bg-slate-200`} title="Select this browser tab to record only the meeting area">
       <Circle className="h-5 w-5 fill-rose-600 text-rose-600" /><span>Record</span>
     </button>
   );

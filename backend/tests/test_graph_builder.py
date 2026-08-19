@@ -119,7 +119,6 @@ def test_knowledge_triple_merge_uses_normalized_keys_for_subject_and_object():
     # land on the same node the participants/project loops already use.
     assert "MERGE (s:Project {key: $subject_key})" in cypher[0]
     assert "MERGE (o:Organization {key: $object_key})" in cypher[0]
-    assert "r.meeting_ids" in cypher[0]
 
 
 def test_knowledge_triple_defaults_to_concept_when_type_unspecified():
@@ -165,20 +164,6 @@ def test_seed_demo_history_person_merges_use_normalized_key():
     assert len(person_calls) == 2  # origin seed meeting + Q2 seed meeting
     for _, kwargs in person_calls:
         assert kwargs["person_key"] == "sarah park"
-
-
-def test_delete_meeting_removes_owned_knowledge_edges_and_prunes_orphans():
-    mock_run = MagicMock(return_value=[])
-    with patch.object(graph_builder, "run_query", mock_run):
-        graph_builder.delete_meeting("m1")
-
-    statements = [c.args[0] for c in mock_run.call_args_list]
-    assert len(statements) == 4
-    assert "MATCH (s)-[r:RELATES_AS]->(o)" in statements[0]
-    assert "WHERE id <> $meeting_id" in statements[0]
-    assert "DETACH DELETE m, d, a" in statements[1]
-    assert "NOT EXISTS { MATCH (s)-[:MENTIONED_IN]->(:Meeting) }" in statements[2]
-    assert "n:Project OR n:Organization OR n:System OR n:Policy OR n:Document OR n:Concept" in statements[3]
 
 
 def test_ensure_constraints_drops_old_name_and_entity_constraints_and_creates_taxonomy_key_constraints():

@@ -52,7 +52,7 @@ def test_global_graph_data_has_no_dangling_links_under_concurrent_write(db_sessi
     ]
     # Management caller + no `person` param -> unscoped org-wide view,
     # unchanged from before access control existed (see _resolve_target).
-    with patch("app.graph.neo4j_service.run_query", side_effect=responses) as mock_run:
+    with patch("app.graph.neo4j_service.run_query", side_effect=responses):
         response = client.get("/graph", headers=caller_headers)
 
     assert response.status_code == 200
@@ -79,7 +79,7 @@ def test_global_graph_data_surfaces_taxonomy_nodes_with_predicate_as_link_type(d
           "predicate": "USES_VENDOR"}],
         [],  # CONTRADICTS
     ]
-    with patch("app.graph.neo4j_service.run_query", side_effect=responses) as mock_run:
+    with patch("app.graph.neo4j_service.run_query", side_effect=responses):
         response = client.get("/graph", headers=caller_headers)
 
     assert response.status_code == 200
@@ -91,9 +91,6 @@ def test_global_graph_data_surfaces_taxonomy_nodes_with_predicate_as_link_type(d
     triple_link = next(l for l in payload["links"] if l["source"] == "project:Project Alpha")
     assert triple_link["target"] == "organization:Provider X"
     assert triple_link["type"] == "USES_VENDOR"
-    relates_as_query = mock_run.call_args_list[7].args[0]
-    assert "EXISTS { MATCH (s)-[:MENTIONED_IN]->(:Meeting) }" in relates_as_query
-    assert "EXISTS { MATCH (o)-[:MENTIONED_IN]->(:Meeting) }" in relates_as_query
 
 
 def test_meeting_graph_data_has_no_dangling_links_for_cross_meeting_contradiction(db_session, caller_headers):

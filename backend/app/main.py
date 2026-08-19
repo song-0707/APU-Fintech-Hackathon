@@ -28,13 +28,6 @@ _DEMO_EMPLOYEES = [
     ("Duncan", "duncan@corpbrain.ai", "VP of Engineering", True),
     ("Kam Xin Le", "kam.xinle@corpbrain.ai", "Head of Product", True),
     ("Yap En Yu", "yap.enyu@corpbrain.ai", "Chief Financial Officer", True),
-    # Synthetic, not a real teammate: every real seeded identity above is
-    # management, which means there was no way to manually verify
-    # employee-scoping (as opposed to management's unrestricted access)
-    # without guessing at an actual person's real org role. Give it at
-    # least one MeetingParticipant row (see verification notes) before
-    # using it to test scoping.
-    ("Test Employee", "test.employee@corpbrain.ai", "QA/Verification only", False),
 ]
 
 
@@ -70,7 +63,11 @@ _allowed_origins = [
     "http://[::1]:5173",
 ]
 if settings.frontend_origin:
-    _allowed_origins.append(settings.frontend_origin)
+    _allowed_origins.extend(
+        origin.strip().rstrip("/")
+        for origin in settings.frontend_origin.split(",")
+        if origin.strip()
+    )
 
 app.add_middleware(
     CORSMiddleware,

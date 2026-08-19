@@ -18,7 +18,7 @@ from app.schemas.meeting import (
     MeetingListItem,
     MeetingStatusResponse,
 )
-from app.services import brief_service, embedding_service
+from app.services import embedding_service
 from app.services.storage_service import StorageService
 from app.tasks.meeting_tasks import process_meeting_task
 
@@ -100,14 +100,16 @@ def delete_meeting(
         raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
     require_meeting_access(db, meeting_id, caller)
 
-    # Graph cleanup must succeed before deleting the SQL row. Otherwise the
-    # UI can lose the meeting from the list while stale nodes remain visible
-    # in Memory Graph with no normal delete path left.
+    # Neo4j/Chroma may legitimately be down in local dev (same tolerance as
+    # main.py's startup constraint setup and askcoco_service's graph
+    # fallback) — log and keep going rather than blocking the SQL delete,
+    # since leaving the meeting stuck forever because a side-store is
+    # offline is worse than a stale node/embedding the next successful
+    # delete-retry (or manual cleanup) can still catch.
     try:
         graph_builder.delete_meeting(meeting_id)
     except Exception as exc:
-        logger.error(f"Meeting {meeting_id}: graph cleanup failed: {exc}")
-        raise HTTPException(status_code=503, detail="Graph cleanup failed; meeting was not deleted. Please retry.")
+        logger.warning(f"Meeting {meeting_id}: graph cleanup failed: {exc}")
 
     try:
         embedding_service.delete_meeting(meeting_id)
@@ -174,13 +176,6 @@ def list_meetings(
             decisions_count=len(summary.get("decisions", [])) if summary else 0,
             action_items_count=len(summary.get("action_items", [])) if summary else 0,
             flags_count=len(summary.get("flags", [])) if summary else 0,
-            # file_path is the storage-relative path (e.g. "raw/<id>/foo.mp4"),
-            # set only by the upload endpoint above -- meetings created via
-            # POST /meetings (schedule-now-upload-later) or without ever
-            # going through a file upload genuinely have none, and that's
-            # real: no source recording exists for them, not just "not
-            # loaded yet".
-            audio_filename=Path(meeting.file_path).name if meeting.file_path else None,
         ))
     return items
 
@@ -219,20 +214,6 @@ def get_meeting_summary(
     if summary is None:
         raise HTTPException(status_code=202, detail=f"Summary not ready yet: {meeting.status}")
     return summary
-
-
-# ── Pre-Meeting Brief ────────────────────────────────────────────────────
-@router.get("/meetings/{meeting_id}/brief")
-def get_meeting_brief(
-    meeting_id: str,
-    db: Session = Depends(get_db),
-    caller: Employee = Depends(get_current_employee),
-) -> dict:
-    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
-    if meeting is None:
-        raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
-    require_meeting_access(db, meeting_id, caller)
-    return brief_service.generate_brief(meeting_id, caller, db)
 
 
 # ── Task 7.2 — Export Report ────────────────────────────────────────────

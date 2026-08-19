@@ -20,6 +20,8 @@ def get_driver():
             _driver = GraphDatabase.driver(
                 settings.neo4j_uri,
                 auth=(settings.neo4j_username, settings.neo4j_password),
+                connection_timeout=settings.neo4j_timeout_seconds,
+                connection_acquisition_timeout=settings.neo4j_timeout_seconds,
             )
         except ServiceUnavailable as exc:
             logger.error(f"Neo4j driver could not be created ({settings.neo4j_uri}): {exc}")

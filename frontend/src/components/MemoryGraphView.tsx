@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { KnowledgeGraphView } from './KnowledgeGraphView';
 import { GraphData } from '../types';
@@ -21,10 +21,6 @@ export const MemoryGraphView: React.FC = () => {
   const [globalGraphData, setGlobalGraphData] = useState<GraphData | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const meetingsKey = useMemo(
-    () => meetings.map((meeting) => `${meeting.id}:${meeting.status}`).join('|'),
-    [meetings]
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -47,7 +43,7 @@ export const MemoryGraphView: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [currentUser.name, meetingsKey]);
+  }, [currentUser.name]);
 
   return (
     <div className="max-w-[1920px] w-full mx-auto px-8 py-6 animate-fade-in font-sans">

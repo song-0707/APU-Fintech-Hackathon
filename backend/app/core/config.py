@@ -7,12 +7,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.6-flash"
-    gemini_vertex_model: str = "gemini-2.5-flash"
-    gemini_service_account_file: str = ""
-    gemini_project_id: str = ""
-    gemini_location: str = "us-central1"
-    google_application_credentials: str = ""
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_username: str = "neo4j"
     neo4j_password: str
@@ -32,6 +26,8 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     demo_mode: bool = True
     chroma_path: str = "storage/chroma"
+    ask_coco_semantic_search: bool = False
+    neo4j_timeout_seconds: float = 5.0
 
     # Set in production to the deployed frontend's exact origin (e.g.
     # https://corporate-brain.onrender.com) — added to the CORS allowlist

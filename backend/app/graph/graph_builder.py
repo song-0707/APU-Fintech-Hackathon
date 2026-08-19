@@ -191,10 +191,6 @@ def build_from_meeting(
             f"MERGE (s:{triple.subject_type.value} {{key: $subject_key}}) ON CREATE SET s.name = $subject "
             f"MERGE (o:{triple.object_type.value} {{key: $object_key}}) ON CREATE SET o.name = $object "
             "MERGE (s)-[r:RELATES_AS {predicate: $predicate}]->(o) "
-            "ON CREATE SET r.meeting_ids = [$meeting_id] "
-            "ON MATCH SET r.meeting_ids = CASE "
-            "WHEN $meeting_id IN coalesce(r.meeting_ids, []) THEN r.meeting_ids "
-            "ELSE coalesce(r.meeting_ids, []) + $meeting_id END "
             "MERGE (m:Meeting {id: $meeting_id}) "
             "MERGE (s)-[:MENTIONED_IN]->(m) "
             "MERGE (o)-[:MENTIONED_IN]->(m)",
@@ -229,46 +225,18 @@ def delete_meeting(meeting_id: str) -> None:
     itself plus its Decision/ActionItem nodes (MADE_IN this meeting), and
     every relationship touching them — including CONTRADICTS edges other
     meetings' decisions point at this meeting's decisions, and RELATES_TO
-    edges to a Project. It also removes knowledge-triple RELATES_AS edges
-    contributed only by this meeting; otherwise deleted meetings can leave
-    stale concept/project/person relationships visible in the global Memory
-    Graph. DETACH DELETE drops a node's relationships along with it, so no
-    separate edge cleanup is needed for relationships touching the deleted
-    Meeting/Decision/ActionItem nodes.
+    edges to a Project. DETACH DELETE drops a node's relationships along with
+    it, so no separate edge cleanup is needed.
 
-    Person nodes are intentionally left in place even if this was their only
-    meeting — they're shared identity nodes (uniqueness constraint on name),
-    not owned by any single meeting. Project/taxonomy nodes with no remaining
-    relationships are pruned because they are no longer visible knowledge."""
-    run_query(
-        "MATCH (m:Meeting {id: $meeting_id}) "
-        "MATCH (s)-[:MENTIONED_IN]->(m) "
-        "MATCH (o)-[:MENTIONED_IN]->(m) "
-        "MATCH (s)-[r:RELATES_AS]->(o) "
-        "SET r.meeting_ids = [id IN coalesce(r.meeting_ids, [$meeting_id]) WHERE id <> $meeting_id] "
-        "WITH r "
-        "WHERE size(r.meeting_ids) = 0 "
-        "DELETE r",
-        meeting_id=meeting_id,
-    )
+    Person and Project nodes are intentionally left in place even if this
+    was their only meeting — they're shared identity nodes (uniqueness
+    constraint on name), not owned by any single meeting."""
     run_query(
         "MATCH (m:Meeting {id: $meeting_id}) "
         "OPTIONAL MATCH (d:Decision)-[:MADE_IN]->(m) "
         "OPTIONAL MATCH (a:ActionItem)-[:MADE_IN]->(m) "
         "DETACH DELETE m, d, a",
         meeting_id=meeting_id,
-    )
-    run_query(
-        "MATCH (s)-[r:RELATES_AS]->(o) "
-        "WHERE NOT EXISTS { MATCH (s)-[:MENTIONED_IN]->(:Meeting) } "
-        "OR NOT EXISTS { MATCH (o)-[:MENTIONED_IN]->(:Meeting) } "
-        "DELETE r"
-    )
-    run_query(
-        "MATCH (n) "
-        "WHERE (n:Project OR n:Organization OR n:System OR n:Policy OR n:Document OR n:Concept) "
-        "AND NOT (n)--() "
-        "DELETE n"
     )
 
 

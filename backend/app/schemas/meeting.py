@@ -28,4 +28,3 @@ class MeetingListItem(BaseModel):
     decisions_count: int = 0
     action_items_count: int = 0
     flags_count: int = 0
-    audio_filename: str | None = None
