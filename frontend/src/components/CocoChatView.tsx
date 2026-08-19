@@ -12,31 +12,22 @@ import {
   Loader2,
 } from 'lucide-react';
 
-// ── Ask Coco backend — uses Vite proxy to avoid cross-origin issues ─────────
-// Vite proxies: /coco/* → http://localhost:8200/*
-//               /api/*  → http://localhost:8000/*
+// ── Ask Coco backend ────────────────────────────────────────────────────────
+
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL
+  ?? import.meta.env.VITE_API_URL
+  ?? 'http://localhost:8000'
+).replace(/\/$/, '');
 
 async function fetchCocoAnswer(query: string): Promise<{ answer: string; citations: CocoChatMessage['citations'] }> {
-  // 1. Try Ask Coco standalone server (via Vite proxy /coco → port 8200)
-  try {
-    const res = await fetch('/coco/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
-    });
-    if (res.ok) return await res.json();
-  } catch {
-    // proxy unreachable, fall through to main backend
-  }
-
-  // 2. Try main FastAPI backend (via Vite proxy /api → port 8000)
-  const res8000 = await fetch('/api/chat', {
+  const response = await fetch(`${API_BASE_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query }),
   });
-  if (!res8000.ok) throw new Error(`Ask Coco API error: ${res8000.status}`);
-  return await res8000.json();
+  if (!response.ok) throw new Error(`Ask Coco API error: ${response.status}`);
+  return await response.json();
 }
 
 // ── Fallback demo answers ──────────────────────────────────────────────────
@@ -62,7 +53,7 @@ function getFallbackAnswer(q: string): { answer: string; citations: CocoChatMess
     };
   }
   return {
-    answer: `Both the Ask Coco backend (port 8200) and the main backend (port 8000) could not be reached right now.\n\nPlease ensure the servers are running, then try again.\n\n(Demo fallback for: "${q}")`,
+    answer: `Ask Coco could not reach the backend at ${API_BASE_URL} right now.\n\nIf this is deployed, check the Vercel environment variables and Render backend status.\n\n(Demo fallback for: "${q}")`,
     citations: [],
   };
 }
