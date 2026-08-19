@@ -81,6 +81,35 @@ function realIdentifierFor(node: GraphNode): string {
   return idx === -1 ? node.id : node.id.slice(idx + 1);
 }
 
+function endpointId(endpoint: string | { id?: string } | null | undefined): string {
+  if (!endpoint) return '';
+  return typeof endpoint === 'string' ? endpoint : endpoint.id || '';
+}
+
+// The app's dark mode toggle (SettingsView) flips a `.dark` class on
+// <html> for Tailwind's `dark:` variant to key off — there's no wired-up
+// ThemeContext/useTheme to read from instead (that file exists but no
+// <ThemeProvider> renders anywhere). The graph nodes below are drawn with
+// raw Canvas2D, which can't see Tailwind classes at all, so this mirrors
+// the same `.dark` class via a MutationObserver to pick matching colors,
+// including live updates if the user toggles theme while the graph is open.
+function useIsDarkMode(): boolean {
+  const [isDark, setIsDark] = useState(
+    () => typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+  );
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const update = () => setIsDark(root.classList.contains('dark'));
+    update();
+    const observer = new MutationObserver(update);
+    observer.observe(root, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
+  return isDark;
+}
+
 export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   data,
   meetings,
@@ -90,6 +119,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   const { sendDirectMessage } = useApp();
   const fgRef = useRef<any>();
   const containerRef = useRef<HTMLDivElement>(null);
+  const isDark = useIsDarkMode();
 
   // react-force-graph-2d's own auto-sizing measures the container on mount
   // and doesn't reliably react to CSS-driven size changes (e.g. this box's
@@ -120,6 +150,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   );
 
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  const [draggedNode, setDraggedNode] = useState<GraphNode | null>(null);
   const [isCopied, setIsCopied] = useState(false);
   const [showMessageModal, setShowMessageModal] = useState(false);
   const [messageText, setMessageText] = useState('');
@@ -204,6 +235,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   // Configure force layout parameters & auto zoom-to-fit when active graph data changes
   useEffect(() => {
     setSelectedNode(null);
+    setDraggedNode(null);
     setShowMessageModal(false);
 
     if (fgRef.current) {
@@ -259,6 +291,18 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
     }
     return results;
   }, [selectedNode, activeGraphData]);
+
+  const dragFocusNodeIds = useMemo(() => {
+    if (!draggedNode) return null;
+    const focused = new Set<string>([draggedNode.id]);
+    for (const link of activeGraphData.links) {
+      const sourceId = endpointId(link.source as any);
+      const targetId = endpointId(link.target as any);
+      if (sourceId === draggedNode.id) focused.add(targetId);
+      if (targetId === draggedNode.id) focused.add(sourceId);
+    }
+    return focused;
+  }, [draggedNode, activeGraphData]);
 
   const handleCopyContact = () => {
     if (!selectedNode) return;
@@ -379,18 +423,30 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
           graphData={activeGraphData}
           cooldownTicks={100}
           d3VelocityDecay={0.3}
-          nodeRelSize={6}
+          nodeRelSize={7}
           onNodeClick={handleNodeClick}
+          onNodeDrag={(node: any) => setDraggedNode(node as GraphNode)}
+          onNodeDragEnd={() => setDraggedNode(null)}
           nodeLabel={(node: any) => `${labelOverrides[node.id] ?? node.name} (${styleFor(node.type).label})`}
           nodeColor={(node: any) => node.color || styleFor(node.type).color}
           linkLabel={(link: any) => link.isContradiction ? `⚠ CONTRADICTS — ${link.message || link.label || ''}` : (link.label || '')}
-          linkColor={(link: any) => link.isContradiction ? '#ef4444' : '#94a3b8'}
+          linkColor={(link: any) => {
+            if (!dragFocusNodeIds) return link.isContradiction ? '#ef4444' : '#94a3b8';
+            const isFocused = dragFocusNodeIds.has(endpointId(link.source)) && dragFocusNodeIds.has(endpointId(link.target));
+            if (!isFocused) return 'rgba(148, 163, 184, 0.14)';
+            return link.isContradiction ? '#ef4444' : '#64748b';
+          }}
           linkLineDash={(link: any) => link.isContradiction ? [4, 2] : null}
-          linkWidth={(link: any) => link.isContradiction ? 2.5 : 1.5}
+          linkWidth={(link: any) => {
+            if (!dragFocusNodeIds) return link.isContradiction ? 2.5 : 1.5;
+            const isFocused = dragFocusNodeIds.has(endpointId(link.source)) && dragFocusNodeIds.has(endpointId(link.target));
+            return isFocused ? (link.isContradiction ? 2.8 : 1.8) : 0.6;
+          }}
           backgroundColor="transparent"
           nodeCanvasObject={(node: any, ctx, globalScale) => {
             const style = styleFor(node.type);
             const isSelected = selectedNode?.id === node.id;
+            const isDragFocused = !dragFocusNodeIds || dragFocusNodeIds.has(node.id);
             // Full name is always in the hover tooltip (nodeLabel) and the
             // detail panel — the canvas label is truncated and only drawn
             // past a zoom threshold (or for the selected node) so a graph
@@ -403,14 +459,22 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
             // World-space draws scale with zoom by default (that's how the
             // giant-circle bug happened) — dividing by globalScale, same as
             // fontSize above, keeps the node's on-screen size constant.
-            const radius = 7 / globalScale;
+            const radius = (isSelected || draggedNode?.id === node.id ? 11 : 9) / globalScale;
 
-            // Node Circle
+            ctx.save();
+            if (!isDragFocused) {
+              ctx.globalAlpha = 0.18;
+            }
+
+            // Node Circle. Selected ring flips per theme (dark-slate on
+            // light, white on dark) so it stays visible against either
+            // canvas background — a fixed dark ring reads fine on the
+            // light bg but disappears against the dark one.
             ctx.beginPath();
             ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
             ctx.fillStyle = node.color || style.color;
             ctx.fill();
-            ctx.strokeStyle = isSelected ? '#1e293b' : '#ffffff';
+            ctx.strokeStyle = isSelected ? (isDark ? '#ffffff' : '#1e293b') : (isDark ? '#334155' : '#ffffff');
             ctx.lineWidth = (isSelected ? 3 : 2) / globalScale;
             ctx.stroke();
 
@@ -422,15 +486,21 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
             ctx.fillStyle = '#ffffff';
             ctx.fillText(style.tag, node.x, node.y);
 
-            if (!showLabel) return;
+            if (!showLabel) {
+              ctx.restore();
+              return;
+            }
 
             ctx.font = `${fontSize}px Inter, sans-serif`;
             const textWidth = ctx.measureText(label).width;
             const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.4);
             const labelY = node.y + radius + 2;
 
-            // Label background
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            // Label background — matches the app's dark floating-panel
+            // style (bg-slate-900/95, used for the legend/detail panels
+            // in this same view) instead of staying a bright white box on
+            // a dark canvas.
+            ctx.fillStyle = isDark ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.9)';
             ctx.fillRect(
               node.x - bckgDimensions[0] / 2,
               labelY,
@@ -438,8 +508,9 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
               bckgDimensions[1]
             );
 
-            ctx.fillStyle = '#1e293b';
+            ctx.fillStyle = isDark ? '#e2e8f0' : '#1e293b';
             ctx.fillText(label, node.x, labelY + bckgDimensions[1] / 2);
+            ctx.restore();
           }}
         />
       )}
