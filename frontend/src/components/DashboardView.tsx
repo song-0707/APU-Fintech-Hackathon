@@ -1,6 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import * as api from '../services/api';
 import { InvitationCard } from './InvitationCard';
 import { Meeting } from '../types';
 import {
@@ -9,10 +8,14 @@ import {
   Search,
   Filter,
   ArrowRight,
-  FileText,
-  X,
   ClipboardList
 } from 'lucide-react';
+
+type DashboardSection = 'upcoming' | 'tasks';
+type TaskView = 'open' | 'completed';
+
+const isCompletedTaskStatus = (status: string): boolean =>
+  status === 'Completed' || status === 'Done';
 
 export const DashboardView: React.FC = () => {
   const {
@@ -26,7 +29,8 @@ export const DashboardView: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [projectFilter, setProjectFilter] = useState('ALL');
-  const [dashboardSection, setDashboardSection] = useState<'upcoming' | 'tasks'>('upcoming');
+  const [dashboardSection, setDashboardSection] = useState<DashboardSection>('upcoming');
+  const [taskView, setTaskView] = useState<TaskView>('open');
   const upcomingSectionRef = useRef<HTMLDivElement>(null);
 
   // meetings is already scoped to currentUser — the backend's /meetings
@@ -54,17 +58,27 @@ export const DashboardView: React.FC = () => {
     [meetings]
   );
 
-  const myTasks = useMemo(() => {
+  const myTaskEntries = useMemo(() => {
     return meetings.flatMap(m =>
       (m.actionItems || [])
         .filter(item =>
-          item.assignee.toLowerCase() === currentUser.name.toLowerCase() &&
-          item.status !== 'Completed' &&
-          (item.status as string) !== 'Done'
+          item.assignee.toLowerCase() === currentUser.name.toLowerCase()
         )
         .map(item => ({ item, meeting: m }))
     );
   }, [meetings, currentUser.name]);
+
+  const myOpenTasks = useMemo(
+    () => myTaskEntries.filter(({ item }) => !isCompletedTaskStatus(item.status)),
+    [myTaskEntries]
+  );
+
+  const myCompletedTasks = useMemo(
+    () => myTaskEntries.filter(({ item }) => isCompletedTaskStatus(item.status)),
+    [myTaskEntries]
+  );
+
+  const visibleTasks = taskView === 'completed' ? myCompletedTasks : myOpenTasks;
 
   const handleEnterRoom = async (meeting: Meeting) => {
     if (!meeting.roomId) return;
@@ -107,19 +121,26 @@ export const DashboardView: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab('meetings')}
+            onClick={() => {
+              setTaskView('completed');
+              setDashboardSection('tasks');
+              upcomingSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
             className="rounded-2xl bg-white/10 hover:bg-white/20 transition-colors p-4 text-left cursor-pointer"
           >
-            <div className="text-3xl sm:text-4xl font-extrabold font-mono">{completedMeetings.length}</div>
-            <div className="text-xs sm:text-sm font-semibold text-blue-100 mt-1">Completed</div>
+            <div className="text-3xl sm:text-4xl font-extrabold font-mono">{myCompletedTasks.length}</div>
+            <div className="text-xs sm:text-sm font-semibold text-blue-100 mt-1">Completed Tasks</div>
           </button>
           <button
             type="button"
-            onClick={() => setDashboardSection(prev => prev === 'tasks' ? 'upcoming' : 'tasks')}
+            onClick={() => {
+              setTaskView('open');
+              setDashboardSection(prev => prev === 'tasks' && taskView === 'open' ? 'upcoming' : 'tasks');
+            }}
             className="rounded-2xl bg-white/10 hover:bg-white/20 transition-colors p-4 text-left cursor-pointer"
           >
-            <div className="text-3xl sm:text-4xl font-extrabold font-mono">{myTasks.length}</div>
-            <div className="text-xs sm:text-sm font-semibold text-blue-100 mt-1">Tasks</div>
+            <div className="text-3xl sm:text-4xl font-extrabold font-mono">{myOpenTasks.length}</div>
+            <div className="text-xs sm:text-sm font-semibold text-blue-100 mt-1">Open Tasks</div>
           </button>
         </div>
       </div>
@@ -185,33 +206,53 @@ export const DashboardView: React.FC = () => {
           <>
             <div className="flex items-center justify-between">
               <h3 className="text-base font-extrabold text-slate-900 dark:text-white font-sans flex items-center space-x-2">
-                <ClipboardList className="w-4 h-4 text-amber-500" />
-                <span>My Tasks</span>
+                {taskView === 'completed' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                ) : (
+                  <ClipboardList className="w-4 h-4 text-amber-500" />
+                )}
+                <span>{taskView === 'completed' ? 'Completed Tasks' : 'Open Tasks'}</span>
               </h3>
-              <button
-                onClick={() => setDashboardSection('upcoming')}
-                className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
-              >
-                Back to Upcoming Meetings
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setTaskView(taskView === 'completed' ? 'open' : 'completed')}
+                  className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                >
+                  {taskView === 'completed' ? `Show Open Tasks (${myOpenTasks.length})` : `Show Completed Tasks (${myCompletedTasks.length})`}
+                </button>
+                <button
+                  onClick={() => setDashboardSection('upcoming')}
+                  className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                >
+                  Back to Upcoming Meetings
+                </button>
+              </div>
             </div>
 
-            {myTasks.length === 0 ? (
+            {visibleTasks.length === 0 ? (
               <div className="p-6 text-center bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-1">
                 <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                  No tasks assigned to {currentUser.name}.
+                  {taskView === 'completed'
+                    ? `No completed tasks recorded for ${currentUser.name}.`
+                    : `No open tasks assigned to ${currentUser.name}.`}
                 </p>
               </div>
             ) : (
               <div className="space-y-2">
-                {myTasks.map(({ item, meeting }) => (
+                {visibleTasks.map(({ item, meeting }) => (
                   <div
                     key={item.id}
                     onClick={() => { setSelectedMeetingId(meeting.id); setActiveTab('meetings'); }}
                     className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-4 shadow-2xs hover:border-blue-300 dark:hover:border-blue-700 transition-all cursor-pointer flex items-center justify-between gap-4"
                   >
                     <div className="min-w-0">
-                      <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{item.task}</p>
+                      <p className={`text-sm font-bold truncate ${
+                        taskView === 'completed'
+                          ? 'text-slate-500 dark:text-slate-400 line-through'
+                          : 'text-slate-900 dark:text-white'
+                      }`}>
+                        {item.task}
+                      </p>
                       <p className="text-xs text-slate-400 mt-0.5">From: {meeting.title} • Due {item.dueDate}</p>
                     </div>
                     <ArrowRight className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />

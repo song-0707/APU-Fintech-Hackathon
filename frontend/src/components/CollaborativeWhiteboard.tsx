@@ -8,8 +8,8 @@ import { Eraser, PenLine, RotateCcw, ChevronLeft, ChevronRight, Plus, Download, 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 type WhiteboardMessage =
-  | { type: 'request-scene' }
-  | { type: 'scene'; currentPage: number; pages: Record<number, readonly ExcalidrawElement[]> }
+  | { type: 'request-scene'; senderId?: string }
+  | { type: 'scene'; senderId?: string; currentPage: number; pages: Record<number, readonly ExcalidrawElement[]>; force?: boolean }
   | { type: 'scene-chunk'; transferId: string; index: number; total: number; data: string };
 
 const encoder = new TextEncoder();
@@ -23,6 +23,37 @@ const bytesToBase64 = (bytes: Uint8Array) => {
 };
 
 const base64ToBytes = (value: string) => Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+
+const normalizePages = (pages: Record<number, readonly ExcalidrawElement[]>) =>
+  Object.entries(pages).reduce<Record<number, readonly ExcalidrawElement[]>>((acc, [page, elements]) => {
+    acc[Number(page)] = elements || [];
+    return acc;
+  }, {});
+
+const maxPageNumber = (pages: Record<number, readonly ExcalidrawElement[]>) =>
+  Math.max(1, ...Object.keys(pages).map(Number).filter(Number.isFinite));
+
+const pageHasVisibleElements = (elements: readonly ExcalidrawElement[] | undefined) =>
+  Boolean(elements?.some((element) => !element.isDeleted));
+
+const hasBoardStateToShare = (pages: Record<number, readonly ExcalidrawElement[]>) =>
+  maxPageNumber(pages) > 1 || Object.values(pages).some(pageHasVisibleElements);
+
+const sceneElementsMatch = (
+  left: readonly ExcalidrawElement[] | undefined,
+  right: readonly ExcalidrawElement[] | undefined,
+) => {
+  const a = left || [];
+  const b = right || [];
+  return a.length === b.length && a.every((element, index) => {
+    const other = b[index];
+    return other
+      && element.id === other.id
+      && element.version === other.version
+      && element.versionNonce === other.versionNonce
+      && element.isDeleted === other.isDeleted;
+  });
+};
 
 /** Automatically export all whiteboard pages as image / PDF assets */
 export async function downloadWhiteboardPdf(pagesMap: Record<number, readonly ExcalidrawElement[]>, roomName: string) {
@@ -57,7 +88,7 @@ export async function downloadWhiteboardPdf(pagesMap: Record<number, readonly Ex
 export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomName = 'meeting-room' }) => {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const ignoreNextChange = useRef(false);
-  const hasReceivedInitialScene = useRef(false);
+  const expectedProgrammaticElements = useRef<readonly ExcalidrawElement[] | null>(null);
   const broadcastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingChunks = useRef(new Map<string, { chunks: string[]; total: number }>());
 
@@ -71,25 +102,61 @@ export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomN
   const [syncError, setSyncError] = useState('');
   const [syncActivity, setSyncActivity] = useState<'ready' | 'sending' | 'received'>('ready');
 
+  const getCurrentSceneElements = useCallback(() => (
+    apiRef.current?.getSceneElements() || pagesRef.current[currentPageRef.current] || []
+  ), []);
+
+  const captureCurrentPage = useCallback(() => {
+    const updatedPages = {
+      ...pagesRef.current,
+      [currentPageRef.current]: getCurrentSceneElements(),
+    };
+    pagesRef.current = updatedPages;
+    return updatedPages;
+  }, [getCurrentSceneElements]);
+
+  const replaceCanvasElements = useCallback((elements: readonly ExcalidrawElement[]) => {
+    expectedProgrammaticElements.current = elements;
+    ignoreNextChange.current = true;
+    apiRef.current?.updateScene({ elements });
+  }, []);
+
+  const applyRemoteScene = useCallback((
+    incomingPages: Record<number, readonly ExcalidrawElement[]>,
+    remoteCurrentPage: number,
+    force = false,
+  ) => {
+    const normalizedPages = normalizePages(incomingPages);
+    if (!force && !hasBoardStateToShare(normalizedPages) && hasBoardStateToShare(pagesRef.current)) {
+      return;
+    }
+
+    pagesRef.current = normalizedPages;
+    const nextTotalPages = maxPageNumber(normalizedPages);
+    setTotalPages(nextTotalPages);
+
+    const nextCurrentPage = currentPageRef.current > nextTotalPages
+      ? Math.max(1, Math.min(remoteCurrentPage || 1, nextTotalPages))
+      : currentPageRef.current;
+    setCurrentPage(nextCurrentPage);
+    currentPageRef.current = nextCurrentPage;
+
+    replaceCanvasElements(normalizedPages[nextCurrentPage] || []);
+    setSyncActivity('received');
+  }, [replaceCanvasElements]);
+
   const handleMessage = useCallback((data: Uint8Array<ArrayBuffer>, _participant?: unknown, _kind?: unknown, topic?: string) => {
     if (topic !== 'whiteboard') return;
     try {
       const payload = JSON.parse(decoder.decode(data)) as WhiteboardMessage;
+      if ('senderId' in payload && payload.senderId && payload.senderId === room.localParticipant.identity) return;
       if (payload.type === 'request-scene') {
-        publishSceneRef.current(pagesRef.current, currentPageRef.current);
+        if (hasBoardStateToShare(pagesRef.current)) {
+          publishSceneRef.current(pagesRef.current, currentPageRef.current);
+        }
       }
       if (payload.type === 'scene' && payload.pages) {
-        ignoreNextChange.current = true;
-        hasReceivedInitialScene.current = true;
-        pagesRef.current = payload.pages;
-        setTotalPages(Math.max(Object.keys(payload.pages).length, 1));
-        const pg = payload.currentPage || 1;
-        setCurrentPage(pg);
-        currentPageRef.current = pg;
-
-        const currentElements = payload.pages[pg] || [];
-        apiRef.current?.updateScene({ elements: currentElements });
-        setSyncActivity('received');
+        applyRemoteScene(payload.pages, payload.currentPage, payload.force);
       }
       if (payload.type === 'scene-chunk') {
         const transfer = pendingChunks.current.get(payload.transferId) ?? {
@@ -101,26 +168,19 @@ export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomN
         if (transfer.chunks.every(Boolean)) {
           pendingChunks.current.delete(payload.transferId);
           const parsed = JSON.parse(decoder.decode(base64ToBytes(transfer.chunks.join('')))) as {
+            senderId?: string;
             currentPage: number;
             pages: Record<number, readonly ExcalidrawElement[]>;
+            force?: boolean;
           };
-          ignoreNextChange.current = true;
-          hasReceivedInitialScene.current = true;
-          pagesRef.current = parsed.pages;
-          setTotalPages(Math.max(Object.keys(parsed.pages).length, 1));
-          const pg = parsed.currentPage || 1;
-          setCurrentPage(pg);
-          currentPageRef.current = pg;
-
-          const currentElements = parsed.pages[parsed.currentPage || 1] || [];
-          apiRef.current?.updateScene({ elements: currentElements });
-          setSyncActivity('received');
+          if (parsed.senderId && parsed.senderId === room.localParticipant.identity) return;
+          applyRemoteScene(parsed.pages, parsed.currentPage, parsed.force);
         }
       }
     } catch {
       setSyncError('A board update could not be read.');
     }
-  }, []);
+  }, [applyRemoteScene, room.localParticipant.identity]);
 
   useEffect(() => {
     room.on(RoomEvent.DataReceived, handleMessage);
@@ -132,14 +192,21 @@ export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomN
     topic: 'whiteboard',
   }), [room]);
 
-  const publishScene = useCallback((allPages: Record<number, readonly ExcalidrawElement[]>, activePg: number) => {
+  const publishScene = useCallback((allPages: Record<number, readonly ExcalidrawElement[]>, activePg: number, options?: { force?: boolean }) => {
     if (broadcastTimer.current) clearTimeout(broadcastTimer.current);
     broadcastTimer.current = setTimeout(() => {
       void (async () => {
         try {
           if (room.state !== ConnectionState.Connected) return;
+          if (!options?.force && !hasBoardStateToShare(allPages)) return;
           setSyncActivity('sending');
-          const payloadObj = { type: 'scene', currentPage: activePg, pages: allPages };
+          const payloadObj = {
+            type: 'scene',
+            senderId: room.localParticipant.identity,
+            currentPage: activePg,
+            pages: allPages,
+            force: options?.force,
+          };
           const sceneBytes = encoder.encode(JSON.stringify(payloadObj));
           if (sceneBytes.byteLength <= CHUNK_BYTES) {
             await send(sceneBytes);
@@ -169,9 +236,9 @@ export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomN
   useEffect(() => {
     const synchronize = () => {
       setSyncError('');
-      void send(encoder.encode(JSON.stringify({ type: 'request-scene' })))
+      void send(encoder.encode(JSON.stringify({ type: 'request-scene', senderId: room.localParticipant.identity })))
         .catch((error) => setSyncError(`Board sync failed: ${error instanceof Error ? error.message : 'unknown error'}`));
-      if (Object.keys(pagesRef.current).length > 0) {
+      if (hasBoardStateToShare(pagesRef.current)) {
         publishSceneRef.current(pagesRef.current, currentPageRef.current);
       }
     };
@@ -185,35 +252,34 @@ export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomN
 
   // Page Switcher Handlers
   const switchPage = (targetPage: number) => {
-    if (targetPage < 1) return;
-    const updatedPages = { ...pagesRef.current };
-
-    if (!updatedPages[targetPage]) {
-      updatedPages[targetPage] = [];
-    }
-
-    pagesRef.current = updatedPages;
-    setTotalPages(Math.max(Object.keys(updatedPages).length, 1));
+    if (targetPage < 1 || targetPage > totalPages) return;
+    const updatedPages = captureCurrentPage();
 
     setCurrentPage(targetPage);
     currentPageRef.current = targetPage;
 
-    ignoreNextChange.current = true;
-    apiRef.current?.updateScene({ elements: updatedPages[targetPage] || [] });
-    publishScene(updatedPages, targetPage);
+    replaceCanvasElements(updatedPages[targetPage] || []);
   };
 
   const addNewPage = () => {
-    const nextPg = Math.max(...Object.keys(pagesRef.current).map(Number), 0) + 1;
-    switchPage(nextPg);
+    const updatedPages = captureCurrentPage();
+    const nextPg = maxPageNumber(updatedPages) + 1;
+    updatedPages[nextPg] = [];
+    pagesRef.current = updatedPages;
+    setTotalPages(nextPg);
+    setCurrentPage(nextPg);
+    currentPageRef.current = nextPg;
+
+    replaceCanvasElements([]);
+    publishScene(updatedPages, nextPg);
   };
 
   const clearCurrentPage = () => {
     setConfirmClear(false);
     const updatedPages = { ...pagesRef.current, [currentPage]: [] };
     pagesRef.current = updatedPages;
-    apiRef.current?.updateScene({ elements: [] });
-    publishScene(updatedPages, currentPage);
+    replaceCanvasElements([]);
+    publishScene(updatedPages, currentPage, { force: true });
   };
 
   return (
@@ -223,7 +289,7 @@ export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomN
         <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-white">
           <PenLine className="h-4 w-4 text-blue-600" />
           <span>Collaborative Whiteboard</span>
-          <span className={`rounded-full px-2 py-0.5 text-[10px] ${syncError ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>
+          <span className={`rounded-full px-2 py-0.5 text-[10px] ${syncError ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300' : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'}`}>
             {syncError || (syncActivity === 'received' ? 'updated' : syncActivity === 'sending' ? 'syncing...' : 'synced')}
           </span>
         </div>
@@ -248,11 +314,11 @@ export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomN
             <button
               type="button"
               onClick={() => {
-                if (currentPage < totalPages) switchPage(currentPage + 1);
-                else addNewPage();
+                switchPage(currentPage + 1);
               }}
-              className="p-1 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 transition-colors cursor-pointer"
-              title={currentPage === totalPages ? "Add New Page" : "Next Page"}
+              disabled={currentPage >= totalPages}
+              className="p-1 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 disabled:opacity-30 transition-colors cursor-pointer"
+              title="Next Page"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
@@ -271,7 +337,7 @@ export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomN
           <button
             type="button"
             onClick={() => void downloadWhiteboardPdf(pagesRef.current, roomName)}
-            className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 text-xs font-bold transition-colors cursor-pointer border border-slate-200 dark:border-slate-700"
+            className="flex items-center space-x-1 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold transition-colors cursor-pointer border border-slate-200 dark:border-slate-700"
             title="Export Whiteboard PDF Pages"
           >
             <Download className="w-3.5 h-3.5 text-blue-600" />
@@ -297,19 +363,21 @@ export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomN
             excalidrawAPI={(api) => {
               apiRef.current = api;
               const initialElements = pagesRef.current[currentPageRef.current] || [];
-              if (initialElements.length > 0) api.updateScene({ elements: initialElements });
+              if (initialElements.length > 0) replaceCanvasElements(initialElements);
             }}
             onChange={(elements) => {
-              pagesRef.current[currentPageRef.current] = elements;
-              if (!hasReceivedInitialScene.current) {
-                hasReceivedInitialScene.current = true;
-                return;
-              }
               if (ignoreNextChange.current) {
+                const expected = expectedProgrammaticElements.current;
                 ignoreNextChange.current = false;
-                return;
+                expectedProgrammaticElements.current = null;
+                if (sceneElementsMatch(expected || [], elements)) return;
               }
-              publishScene(pagesRef.current, currentPageRef.current);
+              const hadBoardState = hasBoardStateToShare(pagesRef.current);
+              const updatedPages = { ...pagesRef.current, [currentPageRef.current]: elements };
+              pagesRef.current = updatedPages;
+              publishScene(updatedPages, currentPageRef.current, {
+                force: hadBoardState && !hasBoardStateToShare(updatedPages),
+              });
             }}
             UIOptions={{ canvasActions: { clearCanvas: false, saveToActiveFile: false, loadScene: false } }}
           />
@@ -319,11 +387,11 @@ export const CollaborativeWhiteboard: React.FC<{ roomName?: string }> = ({ roomN
 
       {confirmClear && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl border border-slate-200">
-            <h3 className="font-bold text-slate-900">Clear Page {currentPage}?</h3>
-            <p className="mt-1 text-xs text-slate-500">This removes drawings on Page {currentPage} for everyone in this room.</p>
+          <div className="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 p-5 shadow-xl border border-slate-200 dark:border-slate-800">
+            <h3 className="font-bold text-slate-900 dark:text-white">Clear Page {currentPage}?</h3>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">This removes drawings on Page {currentPage} for everyone in this room.</p>
             <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setConfirmClear(false)} className="rounded-xl px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer">Cancel</button>
+              <button onClick={() => setConfirmClear(false)} className="rounded-xl px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer">Cancel</button>
               <button onClick={clearCurrentPage} className="flex items-center gap-1 rounded-xl bg-rose-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-rose-700 cursor-pointer"><RotateCcw className="h-3.5 w-3.5" /> Clear Page</button>
             </div>
           </div>

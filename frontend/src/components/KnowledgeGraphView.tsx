@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { GraphData, GraphNode, Meeting } from '../types';
 import { useApp } from '../context/AppContext';
+import { useTheme } from '../context/ThemeContext';
 import * as api from '../services/api';
 import {
   Filter,
@@ -88,6 +89,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
   onSendDirectMessage
 }) => {
   const { sendDirectMessage } = useApp();
+  const { isDark } = useTheme();
   const fgRef = useRef<any>();
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -405,12 +407,11 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
             // fontSize above, keeps the node's on-screen size constant.
             const radius = 7 / globalScale;
 
-            // Node Circle
             ctx.beginPath();
             ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
             ctx.fillStyle = node.color || style.color;
             ctx.fill();
-            ctx.strokeStyle = isSelected ? '#1e293b' : '#ffffff';
+            ctx.strokeStyle = isSelected ? (isDark ? '#ffffff' : '#1e293b') : (isDark ? '#334155' : '#ffffff');
             ctx.lineWidth = (isSelected ? 3 : 2) / globalScale;
             ctx.stroke();
 
@@ -429,8 +430,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
             const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.4);
             const labelY = node.y + radius + 2;
 
-            // Label background
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.fillStyle = isDark ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.9)';
             ctx.fillRect(
               node.x - bckgDimensions[0] / 2,
               labelY,
@@ -438,7 +438,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({
               bckgDimensions[1]
             );
 
-            ctx.fillStyle = '#1e293b';
+            ctx.fillStyle = isDark ? '#e2e8f0' : '#1e293b';
             ctx.fillText(label, node.x, labelY + bckgDimensions[1] / 2);
           }}
         />
