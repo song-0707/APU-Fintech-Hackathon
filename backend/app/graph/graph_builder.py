@@ -165,6 +165,7 @@ def build_from_meeting(
         item_id = _stable_id(meeting_id, "action", item.task)
         run_query(
             "MERGE (a:ActionItem {id: $id}) "
+            "ON CREATE SET a.completed = false "
             "SET a.task = $task, a.deadline = $deadline, a.priority = $priority "
             "MERGE (m:Meeting {id: $meeting_id}) "
             "MERGE (a)-[:MADE_IN]->(m) "
@@ -338,3 +339,53 @@ def _stable_id(meeting_id: str, kind: str, text: str) -> str:
     """Deterministic id so re-processing the same meeting MERGEs instead of
     duplicating nodes."""
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"corporate-brain://{meeting_id}/{kind}/{text}"))
+
+
+def action_item_id(meeting_id: str, task: str) -> str:
+    """Public wrapper so callers outside this module (meetings.py's
+    /summary endpoint, which never queries Neo4j itself — it just reads the
+    stored intelligence JSON) can compute the exact same id
+    write_meeting_intelligence used for this task, without duplicating the
+    id formula or adding a Neo4j round-trip just to look it up."""
+    return _stable_id(meeting_id, "action", task)
+
+
+def get_action_item(item_id: str) -> dict | None:
+    """Task/assignee/completed for one ActionItem — used to permission-check
+    (assignee-or-management) a completion update before making it, and to
+    404 on an id that doesn't exist in the graph. None if not found."""
+    rows = run_query(
+        "MATCH (a:ActionItem {id: $id}) "
+        "OPTIONAL MATCH (a)-[:ASSIGNED_TO]->(p:Person) "
+        "RETURN a.task AS task, p.name AS assignee, coalesce(a.completed, false) AS completed",
+        id=item_id,
+    )
+    return rows[0] if rows else None
+
+
+def get_action_item_completions(meeting_id: str) -> dict[str, bool]:
+    """id -> completed for every ActionItem belonging to this meeting, so
+    /meeting/{id}/summary can annotate each entry from the stored
+    intelligence JSON (which has no completed field of its own — that only
+    ever lives in the graph, set via set_action_item_completed) without one
+    round-trip per item. A meeting whose graph write hasn't run yet (still
+    processing) or a task added since the last graph write both correctly
+    fall through to the caller's own not-completed default."""
+    rows = run_query(
+        "MATCH (a:ActionItem)-[:MADE_IN]->(:Meeting {id: $meeting_id}) "
+        "RETURN a.id AS id, coalesce(a.completed, false) AS completed",
+        meeting_id=meeting_id,
+    )
+    return {row["id"]: row["completed"] for row in rows}
+
+
+def set_action_item_completed(item_id: str, completed: bool) -> None:
+    """The only writer of ActionItem.completed. Deliberately separate from
+    write_meeting_intelligence's MERGE above, which never touches this
+    field after node creation — so reprocessing the same meeting (e.g. a
+    retry) can't silently undo a user's completion."""
+    run_query(
+        "MATCH (a:ActionItem {id: $id}) SET a.completed = $completed",
+        id=item_id,
+        completed=completed,
+    )

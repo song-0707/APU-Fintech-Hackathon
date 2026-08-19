@@ -43,6 +43,30 @@ def set_node_label(payload: SetNodeLabelRequest) -> dict:
     return {"ok": True}
 
 
+class SetActionItemCompletedRequest(BaseModel):
+    completed: bool
+
+
+@router.patch("/action-items/{item_id}")
+def set_action_item_completed(
+    item_id: str,
+    payload: SetActionItemCompletedRequest,
+    caller: Employee = Depends(get_current_employee),
+) -> dict:
+    """Same self-or-management rule as every other endpoint that lets a
+    caller act on a specific named person's behalf (require_access) — the
+    assignee can mark their own task done, management can mark anyone's.
+    item_id is deterministic (meeting_id+task, see
+    graph_builder.action_item_id) and globally unique, so no meeting_id is
+    needed in the path to disambiguate it."""
+    item = graph_builder.get_action_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"Action item {item_id} not found")
+    require_access(item.get("assignee") or "", caller)
+    graph_builder.set_action_item_completed(item_id, payload.completed)
+    return {"id": item_id, "completed": payload.completed}
+
+
 def _drop_dangling_links(nodes: dict[str, dict], links: list[dict]) -> list[dict]:
     """Safety net for react-force-graph-2d's d3-force layer, which throws
     "node not found" if a link's source/target id has no matching node.

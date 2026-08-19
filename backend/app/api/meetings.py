@@ -310,6 +310,21 @@ def get_meeting_summary(
     summary = _load_json(f"summaries/{meeting_id}.json")
     if summary is None:
         raise HTTPException(status_code=202, detail=f"Summary not ready yet: {meeting.status}")
+
+    # The stored intelligence JSON has no id/completed for its action items —
+    # those only ever live in the graph (id is deterministic from
+    # meeting_id+task, same formula graph_builder used when it wrote the
+    # node; completed is set later via PATCH /action-items/{id}, never by
+    # reprocessing). Computed at serve time so this works uniformly for
+    # meetings processed before this field existed, with no file migration.
+    action_items = summary.get("action_items") or []
+    if action_items:
+        completions = graph_builder.get_action_item_completions(meeting_id)
+        for item in action_items:
+            item_id = graph_builder.action_item_id(meeting_id, item.get("task") or "")
+            item["id"] = item_id
+            item["completed"] = completions.get(item_id, False)
+
     return summary
 
 
