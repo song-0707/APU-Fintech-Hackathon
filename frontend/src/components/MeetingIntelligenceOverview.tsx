@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   BrainCircuit,
@@ -52,6 +52,13 @@ const EmptyState: React.FC<{ icon: React.ReactNode; title: string; description: 
 
 export const MeetingIntelligenceOverview: React.FC<MeetingIntelligenceOverviewProps> = ({ meetings, activeSection, onSectionChange, onSelectMeeting }) => {
   const [categoryFilter, setCategoryFilter] = useState('ALL');
+  const [meetingsPage, setMeetingsPage] = useState(0);
+  const MEETINGS_PAGE_SIZE = 6;
+
+  useEffect(() => {
+    setMeetingsPage(0);
+  }, [categoryFilter]);
+
   const completedMeetings = useMemo(() => meetings.filter((meeting) => meeting.status === 'Completed'), [meetings]);
 
   const metrics = useMemo(() => {
@@ -69,6 +76,12 @@ export const MeetingIntelligenceOverview: React.FC<MeetingIntelligenceOverviewPr
   const filteredCompletedMeetings = useMemo(() => completedMeetings.filter((meeting) => (
     categoryFilter === 'ALL' || meeting.project === categoryFilter || meeting.decisions.some((decision) => decision.category === categoryFilter)
   )), [categoryFilter, completedMeetings]);
+
+  const pagedCompletedMeetings = useMemo(
+    () => filteredCompletedMeetings.slice(meetingsPage * MEETINGS_PAGE_SIZE, (meetingsPage + 1) * MEETINGS_PAGE_SIZE),
+    [filteredCompletedMeetings, meetingsPage]
+  );
+  const totalMeetingsPages = Math.max(1, Math.ceil(filteredCompletedMeetings.length / MEETINGS_PAGE_SIZE));
 
   const timelineEntries = useMemo<DecisionTimelineEntry[]>(() => completedMeetings
     .flatMap((meeting) => meeting.decisions.map((decision) => ({ decision, meeting })))
@@ -115,7 +128,32 @@ export const MeetingIntelligenceOverview: React.FC<MeetingIntelligenceOverviewPr
           <div><h2 id="indexed-meetings-title" className="text-lg font-extrabold tracking-tight text-slate-900 dark:text-white">Indexed Meetings</h2><p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">Completed meetings with transcripts, decisions, and action items ready to trace.</p></div>
           <label className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400"><Filter className="h-4 w-4" /><span className="sr-only">Filter indexed meetings by category</span><select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="cursor-pointer rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><option value="ALL">All Categories</option><option value="Core Infrastructure">Core Infrastructure</option><option value="Security & Compliance">Security & Compliance</option><option value="Core Engine v2">Core Engine v2</option></select></label>
         </div>
-        {filteredCompletedMeetings.length ? <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">{filteredCompletedMeetings.map((meeting) => <MeetingCard key={meeting.id} meeting={meeting} onViewDetails={onSelectMeeting} />)}</div> : <EmptyState icon={<Layers className="h-6 w-6" />} title="No indexed meetings" description="Completed meetings in this category will appear here once they are processed." />}
+        {filteredCompletedMeetings.length ? (
+          <>
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {pagedCompletedMeetings.map((meeting) => <MeetingCard key={meeting.id} meeting={meeting} onViewDetails={onSelectMeeting} />)}
+            </div>
+            <div className="flex items-center justify-center gap-4 pt-2">
+              <button
+                type="button"
+                onClick={() => setMeetingsPage((p) => Math.max(0, p - 1))}
+                disabled={meetingsPage === 0}
+                className="rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                &lt;
+              </button>
+              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Page {meetingsPage + 1} of {totalMeetingsPages}</span>
+              <button
+                type="button"
+                onClick={() => setMeetingsPage((p) => Math.min(totalMeetingsPages - 1, p + 1))}
+                disabled={meetingsPage >= totalMeetingsPages - 1}
+                className="rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                &gt;
+              </button>
+            </div>
+          </>
+        ) : <EmptyState icon={<Layers className="h-6 w-6" />} title="No indexed meetings" description="Completed meetings in this category will appear here once they are processed." />}
       </section>}
 
       {activeSection === 'decisions' && <section className="space-y-4" aria-labelledby="decision-timeline-title">
