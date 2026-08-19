@@ -299,28 +299,47 @@ def _create_meeting_from_session(room_name: str, started_at: datetime, segments:
     fields, and generates a distinguishing title so repeated calls in the
     same default 'team-sync' room don't all look identical in Meeting
     Intelligence. Tagged source='live'/room_id=room_name so cards can show
-    the room ID as the headline instead of this generated title."""
+    the room ID as the headline instead of this generated title.
+
+    If this room_id belongs to a still-pending scheduled invite (Enter
+    Room on an InvitationCard), that same row is reused instead -- title
+    and project stay whatever the organizer set (more meaningful than the
+    generated fallback below), only the actual call's timing/status
+    change. Without this, the original invitation sat in Upcoming forever
+    while a second, disconnected Meeting appeared in Completed for the
+    same real-world meeting. Only a still-`scheduled`-status row matches,
+    so a room code reused after its original meeting already went through
+    the pipeline falls through to creating a new row instead of silently
+    overwriting already-processed decisions/transcript."""
     ended_at = datetime.now(timezone.utc)
     elapsed = max(0, int((ended_at - started_at).total_seconds()))
     h, m, s = elapsed // 3600, (elapsed % 3600) // 60, elapsed % 60
     duration = f"{h:02d}:{m:02d}:{s:02d}"
-    title = f"Live: {room_name} — {started_at.strftime('%Y-%m-%d %H:%M')}"
 
     db = SessionLocal()
     try:
-        meeting = Meeting(
-            title=title,
-            date=started_at.strftime("%Y-%m-%d %H:%M"),
-            duration=duration,
-            file_path=None,
-            status="pending",
-            source="live",
-            room_id=room_name,
-        )
-        db.add(meeting)
-        db.commit()
-        db.refresh(meeting)
-        meeting_id = meeting.id
+        scheduled = db.query(Meeting).filter_by(room_id=room_name, source="scheduled", status="scheduled").first()
+        if scheduled is not None:
+            scheduled.date = started_at.strftime("%Y-%m-%d %H:%M")
+            scheduled.duration = duration
+            scheduled.status = "pending"
+            db.commit()
+            meeting_id = scheduled.id
+        else:
+            title = f"Live: {room_name} — {started_at.strftime('%Y-%m-%d %H:%M')}"
+            meeting = Meeting(
+                title=title,
+                date=started_at.strftime("%Y-%m-%d %H:%M"),
+                duration=duration,
+                file_path=None,
+                status="pending",
+                source="live",
+                room_id=room_name,
+            )
+            db.add(meeting)
+            db.commit()
+            db.refresh(meeting)
+            meeting_id = meeting.id
     finally:
         db.close()
 
