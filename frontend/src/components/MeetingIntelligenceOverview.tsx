@@ -60,6 +60,16 @@ export const MeetingIntelligenceOverview: React.FC<MeetingIntelligenceOverviewPr
   }, [categoryFilter]);
 
   const completedMeetings = useMemo(() => meetings.filter((meeting) => meeting.status === 'Completed'), [meetings]);
+  const visibleMeetings = useMemo(() => meetings.filter((meeting) => (
+    meeting.status === 'Completed'
+    || meeting.status === 'Pending'
+    || meeting.status === 'Preprocessing'
+    || meeting.status === 'ASR'
+    || meeting.status === 'LLM'
+    || meeting.status === 'Graph'
+    || meeting.status === 'Retrying'
+    || meeting.status === 'Failed'
+  )), [meetings]);
 
   const metrics = useMemo(() => {
     const decisions = completedMeetings.flatMap((meeting) => meeting.decisions);
@@ -73,15 +83,15 @@ export const MeetingIntelligenceOverview: React.FC<MeetingIntelligenceOverviewPr
     };
   }, [completedMeetings]);
 
-  const filteredCompletedMeetings = useMemo(() => completedMeetings.filter((meeting) => (
+  const filteredVisibleMeetings = useMemo(() => visibleMeetings.filter((meeting) => (
     categoryFilter === 'ALL' || meeting.project === categoryFilter || meeting.decisions.some((decision) => decision.category === categoryFilter)
-  )), [categoryFilter, completedMeetings]);
+  )), [categoryFilter, visibleMeetings]);
 
-  const pagedCompletedMeetings = useMemo(
-    () => filteredCompletedMeetings.slice(meetingsPage * MEETINGS_PAGE_SIZE, (meetingsPage + 1) * MEETINGS_PAGE_SIZE),
-    [filteredCompletedMeetings, meetingsPage]
+  const pagedVisibleMeetings = useMemo(
+    () => filteredVisibleMeetings.slice(meetingsPage * MEETINGS_PAGE_SIZE, (meetingsPage + 1) * MEETINGS_PAGE_SIZE),
+    [filteredVisibleMeetings, meetingsPage]
   );
-  const totalMeetingsPages = Math.max(1, Math.ceil(filteredCompletedMeetings.length / MEETINGS_PAGE_SIZE));
+  const totalMeetingsPages = Math.max(1, Math.ceil(filteredVisibleMeetings.length / MEETINGS_PAGE_SIZE));
 
   const timelineEntries = useMemo<DecisionTimelineEntry[]>(() => completedMeetings
     .flatMap((meeting) => meeting.decisions.map((decision) => ({ decision, meeting })))
@@ -92,7 +102,7 @@ export const MeetingIntelligenceOverview: React.FC<MeetingIntelligenceOverviewPr
     .sort((a, b) => b.meeting.dateTime.localeCompare(a.meeting.dateTime)), [completedMeetings]);
 
   const metricCards: Array<{ section: IntelligenceSection; label: string; value: number; detail: string; icon: React.ReactNode; activeClass: string }> = [
-    { section: 'meetings', label: 'Indexed Meetings', value: metrics.completedCount, detail: 'Completed and searchable', icon: <Layers className="h-5 w-5" />, activeClass: 'border-blue-500 ring-2 ring-blue-100 dark:ring-blue-950' },
+    { section: 'meetings', label: 'Meetings', value: visibleMeetings.length, detail: 'Completed and processing', icon: <Layers className="h-5 w-5" />, activeClass: 'border-blue-500 ring-2 ring-blue-100 dark:ring-blue-950' },
     { section: 'decisions', label: 'Extracted Decisions', value: metrics.totalDecisions, detail: 'Traceable organizational memory', icon: <Sparkles className="h-5 w-5" />, activeClass: 'border-emerald-500 ring-2 ring-emerald-100 dark:ring-emerald-950' },
     { section: 'tasks', label: 'Assigned Tasks', value: metrics.totalActionItems, detail: 'Open source meeting in one click', icon: <CheckSquare className="h-5 w-5" />, activeClass: 'border-amber-500 ring-2 ring-amber-100 dark:ring-amber-950' },
   ];
@@ -125,13 +135,13 @@ export const MeetingIntelligenceOverview: React.FC<MeetingIntelligenceOverviewPr
 
       {activeSection === 'meetings' && <section className="space-y-4" aria-labelledby="indexed-meetings-title">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div><h2 id="indexed-meetings-title" className="text-lg font-extrabold tracking-tight text-slate-900 dark:text-white">Indexed Meetings</h2><p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">Completed meetings with transcripts, decisions, and action items ready to trace.</p></div>
+          <div><h2 id="indexed-meetings-title" className="text-lg font-extrabold tracking-tight text-slate-900 dark:text-white">Meetings</h2><p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">Scheduled live meetings appear here while their transcript, decisions, and action items are processing.</p></div>
           <label className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400"><Filter className="h-4 w-4" /><span className="sr-only">Filter indexed meetings by category</span><select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} className="cursor-pointer rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><option value="ALL">All Categories</option><option value="Core Infrastructure">Core Infrastructure</option><option value="Security & Compliance">Security & Compliance</option><option value="Core Engine v2">Core Engine v2</option></select></label>
         </div>
-        {filteredCompletedMeetings.length ? (
+        {filteredVisibleMeetings.length ? (
           <>
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-              {pagedCompletedMeetings.map((meeting) => <MeetingCard key={meeting.id} meeting={meeting} onViewDetails={onSelectMeeting} />)}
+              {pagedVisibleMeetings.map((meeting) => <MeetingCard key={meeting.id} meeting={meeting} onViewDetails={onSelectMeeting} />)}
             </div>
             <div className="flex items-center justify-center gap-4 pt-2">
               <button
@@ -153,7 +163,7 @@ export const MeetingIntelligenceOverview: React.FC<MeetingIntelligenceOverviewPr
               </button>
             </div>
           </>
-        ) : <EmptyState icon={<Layers className="h-6 w-6" />} title="No indexed meetings" description="Completed meetings in this category will appear here once they are processed." />}
+        ) : <EmptyState icon={<Layers className="h-6 w-6" />} title="No meetings processing" description="Live meetings will appear here after everyone leaves the room and the AI pipeline starts." />}
       </section>}
 
       {activeSection === 'decisions' && <section className="space-y-4" aria-labelledby="decision-timeline-title">

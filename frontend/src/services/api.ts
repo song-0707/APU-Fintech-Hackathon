@@ -544,6 +544,7 @@ export function mergeBackendIntoMeeting(
     // meeting; InvitationCard has nothing else to show as attendees.
     participants: summary?.participants || item.participant_names || base.participants || [],
     status: mapBackendStatus(item.status, item.progress),
+    progress: item.progress,
     duration: summary?.duration || base.duration,
     summary: summary?.summary || base.summary,
     decisions: summary ? summary.decisions.map((d, i) => toDecision(d, base.id, i)) : base.decisions || [],
@@ -566,11 +567,15 @@ export function backendListItemToMeeting(item: BackendMeetingListItem): Meeting 
     title: item.title,
     project: item.project || 'Unassigned',
     dateTime: item.date || new Date().toISOString(),
-    participants: [],
+    participants: item.participant_names || [],
     status: mapBackendStatus(item.status, item.progress),
+    progress: item.progress,
     decisions: [],
     actionItems: [],
     transcript: [],
     contradictions: [],
+    source: item.source as Meeting['source'],
+    roomId: item.room_id || undefined,
+    rsvpStatus: item.rsvp_status as Meeting['rsvpStatus'],
   };
 }

@@ -296,6 +296,7 @@ def _process_meeting(task, meeting_id: str, run_pipeline) -> None:
 
         def on_progress(pct: int, message: str) -> None:
             meeting.progress = pct
+            task_record.progress = pct
             db.commit()
             logger.info(f"[{meeting_id}] {pct}% — {message}")
 
@@ -303,6 +304,7 @@ def _process_meeting(task, meeting_id: str, run_pipeline) -> None:
         _save_and_graph(db, meeting, intelligence)
 
         task_record.status = "completed"
+        task_record.progress = 100
         meeting.status = "completed"
         meeting.progress = 100
         db.commit()

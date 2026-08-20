@@ -21,7 +21,7 @@ from app.core.config import get_settings
 from app.core.logger import get_logger
 from app.database.session import SessionLocal
 from app.graph import contradiction_service
-from app.models.meeting import Meeting
+from app.models.meeting import Meeting, ProcessingTask
 from app.services import live_transcription_service
 from app.services.storage_service import StorageService
 from app.tasks.meeting_tasks import process_live_meeting_task
@@ -301,6 +301,14 @@ def _create_meeting_from_session(room_name: str, started_at: datetime, segments:
             scheduled.date = started_at.strftime("%Y-%m-%d %H:%M")
             scheduled.duration = duration
             scheduled.status = "pending"
+            scheduled.progress = 1
+            task = db.query(ProcessingTask).filter_by(meeting_id=scheduled.id).first()
+            if task is None:
+                task = ProcessingTask(meeting_id=scheduled.id)
+                db.add(task)
+            task.status = "pending"
+            task.progress = 1
+            task.error_message = None
             db.commit()
             meeting_id = scheduled.id
         else:
@@ -311,12 +319,15 @@ def _create_meeting_from_session(room_name: str, started_at: datetime, segments:
                 duration=duration,
                 file_path=None,
                 status="pending",
+                progress=1,
                 source="live",
                 room_id=room_name,
             )
             db.add(meeting)
             db.commit()
             db.refresh(meeting)
+            db.add(ProcessingTask(meeting_id=meeting.id, status="pending", progress=1))
+            db.commit()
             meeting_id = meeting.id
     finally:
         db.close()

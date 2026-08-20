@@ -10,7 +10,8 @@ import {
   ArrowRight, 
   FileAudio,
   Sparkles,
-  UploadCloud
+  UploadCloud,
+  Loader2
 } from 'lucide-react';
 
 interface MeetingCardProps {
@@ -29,6 +30,9 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   const { openDmWithUser } = useApp();
   const [isTransitioning, setIsTransitioning] = useState(false);
   const isCompleted = meeting.status === 'Completed';
+  const isScheduled = meeting.status === 'Scheduled';
+  const isProcessing = !isCompleted && !isScheduled && meeting.status !== 'Failed';
+  const progress = Math.max(0, Math.min(100, meeting.progress ?? (isCompleted ? 100 : isProcessing ? 5 : 0)));
 
   const handleMarkAsDoneClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -63,7 +67,12 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
           <h3 className="text-base font-bold text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors line-clamp-1">
             {meeting.source === 'live' && meeting.roomId ? `Room ${meeting.roomId}` : meeting.title}
           </h3>
-          {meeting.audioFileName ? (
+          {isProcessing ? (
+            <p className="text-xs text-blue-600 dark:text-blue-400 font-semibold flex items-center gap-1.5 mt-1">
+              <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+              <span>Processing meeting intelligence</span>
+            </p>
+          ) : meeting.audioFileName ? (
             <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mt-1">
               <FileAudio className="w-3.5 h-3.5 text-blue-500 shrink-0" />
               <span className="truncate">{meeting.audioFileName}</span>
@@ -76,6 +85,21 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
             </p>
           ) : null}
         </div>
+
+        {isProcessing && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+              <span>AI pipeline progress</span>
+              <span>{progress}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+              <div
+                className="h-full rounded-full bg-blue-600 transition-all duration-500 dark:bg-blue-500"
+                style={{ width: `${Math.max(4, progress)}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Metadata */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500 dark:text-slate-400">
@@ -123,6 +147,15 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 group-hover/btn:scale-110 transition-transform" />
               <span>View Decision Intelligence</span>
               <ArrowRight className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 group-hover/btn:translate-x-1 transition-transform" />
+            </button>
+          ) : isProcessing ? (
+            <button
+              type="button"
+              disabled
+              className="w-full py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 font-semibold text-xs flex items-center justify-center gap-2 cursor-not-allowed"
+            >
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>Processing after live meeting</span>
             </button>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

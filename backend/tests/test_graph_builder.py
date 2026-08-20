@@ -142,6 +142,8 @@ def test_knowledge_triple_merge_uses_normalized_keys_for_subject_and_object():
     # land on the same node the participants/project loops already use.
     assert "MERGE (s:Project {key: $subject_key})" in cypher[0]
     assert "MERGE (o:Organization {key: $object_key})" in cypher[0]
+    assert "SET r.meeting_ids = CASE" in cypher[0]
+    assert kwargs["meeting_id"] == "m1"
 
 
 def test_knowledge_triple_defaults_to_concept_when_type_unspecified():
@@ -153,6 +155,17 @@ def test_knowledge_triple_defaults_to_concept_when_type_unspecified():
     cypher, _ = next(c for c in mock_run.call_args_list if "RELATES_AS" in c.args[0])
     assert "MERGE (s:Concept {key: $subject_key})" in cypher[0]
     assert "MERGE (o:Concept {key: $object_key})" in cypher[0]
+
+
+def test_delete_meeting_removes_owned_knowledge_triple_edges_and_legacy_orphans():
+    mock_run = MagicMock(return_value=[])
+    with patch.object(graph_builder, "run_query", mock_run):
+        graph_builder.delete_meeting("m1")
+
+    statements = [c.args[0] for c in mock_run.call_args_list]
+    assert any("MATCH ()-[r:RELATES_AS]->()" in stmt and "DELETE r" in stmt for stmt in statements)
+    assert any("DETACH DELETE m, d, a" in stmt for stmt in statements)
+    assert any("r.meeting_ids IS NULL" in stmt and "MENTIONED_IN" in stmt and "DELETE r" in stmt for stmt in statements)
 
 
 def test_knowledge_triple_typed_as_person_uses_the_same_label_and_key_as_participants():

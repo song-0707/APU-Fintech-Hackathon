@@ -191,6 +191,11 @@ def get_meeting_graph_data(
     for row in neo4j_service.run_query(
         """MATCH (s)-[:MENTIONED_IN]->(:Meeting {id: $id})
            MATCH (s)-[r:RELATES_AS]->(o)
+           WHERE $id IN coalesce(r.meeting_ids, [])
+              OR (
+                r.meeting_ids IS NULL
+                AND EXISTS { MATCH (o)-[:MENTIONED_IN]->(:Meeting {id: $id}) }
+              )
            RETURN s.name AS subject, coalesce(s.display_name, s.name) AS subject_label, labels(s)[0] AS subject_type,
                   o.name AS object, coalesce(o.display_name, o.name) AS object_label, labels(o)[0] AS object_type,
                   r.predicate AS predicate""",
@@ -428,6 +433,12 @@ def get_global_graph_data(
 
     for row in neo4j_service.run_query(
         """MATCH (s)-[r:RELATES_AS]->(o)
+           WHERE any(meeting_id IN coalesce(r.meeting_ids, [])
+             WHERE EXISTS { MATCH (m:Meeting) WHERE m.id = meeting_id })
+              OR (
+                r.meeting_ids IS NULL
+                AND EXISTS { MATCH (s)-[:MENTIONED_IN]->(:Meeting)<-[:MENTIONED_IN]-(o) }
+              )
            RETURN s.name AS subject, coalesce(s.display_name, s.name) AS subject_label, labels(s)[0] AS subject_type,
                   o.name AS object, coalesce(o.display_name, o.name) AS object_label, labels(o)[0] AS object_type,
                   r.predicate AS predicate"""

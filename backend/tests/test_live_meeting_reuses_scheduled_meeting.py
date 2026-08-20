@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from app.api import live_meeting
 from app.database.session import SessionLocal
-from app.models.meeting import Meeting
+from app.models.meeting import Meeting, ProcessingTask
 
 
 def test_finalization_reuses_the_original_scheduled_meeting_row():
@@ -34,6 +34,11 @@ def test_finalization_reuses_the_original_scheduled_meeting_row():
         assert reused.source == "scheduled"
         assert reused.room_id == room_name
         assert reused.status == "pending"
+        assert reused.progress == 1
+        task = db.query(ProcessingTask).filter_by(meeting_id=meeting_id).first()
+        assert task is not None
+        assert task.status == "pending"
+        assert task.progress == 1
         assert reused.date is not None
         assert reused.duration is not None
         assert db.query(Meeting).filter_by(room_id=room_name).count() == 1
@@ -54,6 +59,11 @@ def test_finalization_creates_a_new_meeting_when_no_scheduled_row_matches():
         assert created.source == "live"
         assert created.room_id == room_name
         assert created.title.startswith(f"Live: {room_name}")
+        assert created.progress == 1
+        task = db.query(ProcessingTask).filter_by(meeting_id=meeting_id).first()
+        assert task is not None
+        assert task.status == "pending"
+        assert task.progress == 1
     finally:
         db.close()
 

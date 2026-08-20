@@ -52,7 +52,7 @@ def test_global_graph_data_has_no_dangling_links_under_concurrent_write(db_sessi
     ]
     # Management caller + no `person` param -> unscoped org-wide view,
     # unchanged from before access control existed (see _resolve_target).
-    with patch("app.graph.neo4j_service.run_query", side_effect=responses):
+    with patch("app.graph.neo4j_service.run_query", side_effect=responses) as mock_run:
         response = client.get("/graph", headers=caller_headers)
 
     assert response.status_code == 200
@@ -79,7 +79,7 @@ def test_global_graph_data_surfaces_taxonomy_nodes_with_predicate_as_link_type(d
           "predicate": "USES_VENDOR"}],
         [],  # CONTRADICTS
     ]
-    with patch("app.graph.neo4j_service.run_query", side_effect=responses):
+    with patch("app.graph.neo4j_service.run_query", side_effect=responses) as mock_run:
         response = client.get("/graph", headers=caller_headers)
 
     assert response.status_code == 200
@@ -91,6 +91,9 @@ def test_global_graph_data_surfaces_taxonomy_nodes_with_predicate_as_link_type(d
     triple_link = next(l for l in payload["links"] if l["source"] == "project:Project Alpha")
     assert triple_link["target"] == "organization:Provider X"
     assert triple_link["type"] == "USES_VENDOR"
+    rel_query = next(c.args[0] for c in mock_run.call_args_list if "MATCH (s)-[r:RELATES_AS]->(o)" in c.args[0])
+    assert "r.meeting_ids" in rel_query
+    assert "MENTIONED_IN" in rel_query
 
 
 def test_meeting_graph_data_has_no_dangling_links_for_cross_meeting_contradiction(db_session, caller_headers):
@@ -108,13 +111,16 @@ def test_meeting_graph_data_has_no_dangling_links_for_cross_meeting_contradictio
     # Management caller so require_meeting_access short-circuits without
     # needing a seeded MeetingParticipant row — this test is about link
     # integrity, not access control (see the boundary tests below for that).
-    with patch("app.graph.neo4j_service.run_query", side_effect=responses):
+    with patch("app.graph.neo4j_service.run_query", side_effect=responses) as mock_run:
         response = client.get("/meeting/m1/graph-data", headers=caller_headers)
 
     assert response.status_code == 200
     payload = response.json()
     _assert_no_dangling_links(payload)
     assert {"decision:d1", "decision:d2"} <= {n["id"] for n in payload["nodes"]}
+    rel_query = next(c.args[0] for c in mock_run.call_args_list if "MATCH (s)-[r:RELATES_AS]->(o)" in c.args[0])
+    assert "$id IN coalesce(r.meeting_ids, [])" in rel_query
+    assert "MATCH (o)-[:MENTIONED_IN]->(:Meeting {id: $id})" in rel_query
 
 
 # ── Access control boundary (the audit's core finding: this was untested) ──

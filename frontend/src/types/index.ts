@@ -122,6 +122,7 @@ export interface Meeting {
   department?: string;
   participants: string[];
   status: ProcessingStatus;
+  progress?: number;
   duration?: string;
   summary?: string;
   decisions: Decision[];

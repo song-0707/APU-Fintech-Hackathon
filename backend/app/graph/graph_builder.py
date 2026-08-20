@@ -202,6 +202,10 @@ def build_from_meeting(
             f"MERGE (s:{triple.subject_type.value} {{key: $subject_key}}) ON CREATE SET s.name = $subject "
             f"MERGE (o:{triple.object_type.value} {{key: $object_key}}) ON CREATE SET o.name = $object "
             "MERGE (s)-[r:RELATES_AS {predicate: $predicate}]->(o) "
+            "SET r.meeting_ids = CASE "
+            "WHEN r.meeting_ids IS NULL THEN [$meeting_id] "
+            "WHEN NOT ($meeting_id IN r.meeting_ids) THEN r.meeting_ids + $meeting_id "
+            "ELSE r.meeting_ids END "
             "MERGE (m:Meeting {id: $meeting_id}) "
             "MERGE (s)-[:MENTIONED_IN]->(m) "
             "MERGE (o)-[:MENTIONED_IN]->(m)",
@@ -239,15 +243,32 @@ def delete_meeting(meeting_id: str) -> None:
     edges to a Project. DETACH DELETE drops a node's relationships along with
     it, so no separate edge cleanup is needed.
 
-    Person and Project nodes are intentionally left in place even if this
-    was their only meeting — they're shared identity nodes (uniqueness
-    constraint on name), not owned by any single meeting."""
+    Shared identity/taxonomy nodes are intentionally left in place even if
+    this was their only meeting — they are keyed by name and can be reused
+    by later meetings. Knowledge-triple RELATES_AS edges are meeting-scoped
+    via r.meeting_ids, so deleting a meeting removes only that meeting's
+    provenance from the edge and drops the edge when no meetings still own
+    it."""
+    run_query(
+        "MATCH ()-[r:RELATES_AS]->() "
+        "WHERE $meeting_id IN coalesce(r.meeting_ids, []) "
+        "SET r.meeting_ids = [id IN r.meeting_ids WHERE id <> $meeting_id] "
+        "WITH r WHERE size(r.meeting_ids) = 0 "
+        "DELETE r",
+        meeting_id=meeting_id,
+    )
     run_query(
         "MATCH (m:Meeting {id: $meeting_id}) "
         "OPTIONAL MATCH (d:Decision)-[:MADE_IN]->(m) "
         "OPTIONAL MATCH (a:ActionItem)-[:MADE_IN]->(m) "
         "DETACH DELETE m, d, a",
         meeting_id=meeting_id,
+    )
+    run_query(
+        "MATCH (s)-[r:RELATES_AS]->(o) "
+        "WHERE r.meeting_ids IS NULL "
+        "AND NOT EXISTS { MATCH (s)-[:MENTIONED_IN]->(:Meeting)<-[:MENTIONED_IN]-(o) } "
+        "DELETE r"
     )
 
 
