@@ -138,9 +138,7 @@ def build_from_meeting(
             "SET d.text = $text, d.confidence = $confidence, d.timestamp = $timestamp, "
             "d.reason = $reason, d.evidence = $evidence "
             "MERGE (m:Meeting {id: $meeting_id}) "
-            "MERGE (d)-[:MADE_IN]->(m) "
-            "MERGE (p:Person {key: $speaker_key}) ON CREATE SET p.name = $speaker "
-            "MERGE (d)-[:MADE_BY]->(p)",
+            "MERGE (d)-[:MADE_IN]->(m)",
             id=decision_id,
             text=decision.text,
             confidence=decision.confidence.value,
@@ -148,9 +146,16 @@ def build_from_meeting(
             reason=decision.reason,
             evidence=decision.evidence,
             meeting_id=meeting_id,
-            speaker=decision.speaker,
-            speaker_key=_normalize_key(decision.speaker),
         )
+        if decision.speaker.strip():
+            run_query(
+                "MATCH (d:Decision {id: $id}) "
+                "MERGE (p:Person {key: $speaker_key}) ON CREATE SET p.name = $speaker "
+                "MERGE (d)-[:MADE_BY]->(p)",
+                id=decision_id,
+                speaker=decision.speaker,
+                speaker_key=_normalize_key(decision.speaker),
+            )
         if project:
             run_query(
                 "MATCH (d:Decision {id: $id}) "
@@ -168,17 +173,22 @@ def build_from_meeting(
             "ON CREATE SET a.completed = false "
             "SET a.task = $task, a.deadline = $deadline, a.priority = $priority "
             "MERGE (m:Meeting {id: $meeting_id}) "
-            "MERGE (a)-[:MADE_IN]->(m) "
-            "MERGE (p:Person {key: $assignee_key}) ON CREATE SET p.name = $assignee "
-            "MERGE (a)-[:ASSIGNED_TO]->(p)",
+            "MERGE (a)-[:MADE_IN]->(m)",
             id=item_id,
             task=item.task,
             deadline=item.deadline,
             priority=item.priority,
             meeting_id=meeting_id,
-            assignee=item.assignee,
-            assignee_key=_normalize_key(item.assignee),
         )
+        if item.assignee.strip():
+            run_query(
+                "MATCH (a:ActionItem {id: $id}) "
+                "MERGE (p:Person {key: $assignee_key}) ON CREATE SET p.name = $assignee "
+                "MERGE (a)-[:ASSIGNED_TO]->(p)",
+                id=item_id,
+                assignee=item.assignee,
+                assignee_key=_normalize_key(item.assignee),
+            )
 
     for triple in intelligence.knowledge_triples:
         # subject_type/object_type are interpolated directly as the Cypher

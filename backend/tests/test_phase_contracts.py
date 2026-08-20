@@ -3,7 +3,16 @@ from unittest.mock import MagicMock
 from app.core.config import Settings
 from app.models.employee import Employee, MeetingParticipant
 from app.models.meeting import Meeting
-from app.schemas.meeting_intelligence import Decision, MeetingAnalysis
+from app.schemas.meeting_intelligence import (
+    ActionItem,
+    Decision,
+    DecisionConfidence,
+    EntityType,
+    KnowledgeTriple,
+    MeetingAnalysis,
+    MeetingIntelligence,
+    TranscriptLine,
+)
 from app.services import askcoco_service
 from app.services.gemini_service import parse_analysis_response
 from app.services.storage_service import StorageService
@@ -142,6 +151,52 @@ def test_link_participants_is_idempotent_on_reprocessing(db_session):
 
     rows = db_session.query(MeetingParticipant).filter_by(meeting_id=meeting.id).all()
     assert len(rows) == 1
+
+
+def test_sanitize_registered_people_drops_unknown_speaker_identities(db_session):
+    employee = Employee(name="Thim Yee Song", email="thim@example.com")
+    db_session.add(employee)
+    db_session.commit()
+
+    intelligence = MeetingIntelligence(
+        meeting_id="mtg-registered-only",
+        participants=["Thim Yee Song", "Mike", "CEO"],
+        speaker_map={"SPEAKER_01": "Thim Yee Song", "SPEAKER_02": "Mike"},
+        transcript=[
+            TranscriptLine(timestamp="00:00:01", speaker="Thim Yee Song", speaker_raw="0", text="Welcome."),
+            TranscriptLine(timestamp="00:00:02", speaker="Mike", speaker_raw="1", text="Thanks."),
+        ],
+        decisions=[
+            Decision(
+                text="Proceed with the demo",
+                confidence=DecisionConfidence.firm_commitment,
+                timestamp="00:00:03",
+                speaker="Mike",
+            )
+        ],
+        action_items=[ActionItem(task="Send notes", assignee="CEO")],
+        knowledge_triples=[
+            KnowledgeTriple(
+                subject="Mike",
+                subject_type=EntityType.person,
+                predicate="INTRODUCES",
+                object="Thim Yee Song",
+                object_type=EntityType.person,
+            )
+        ],
+    )
+
+    sanitized = meeting_tasks._sanitize_registered_people(db_session, intelligence)
+
+    assert sanitized.participants == ["Thim Yee Song"]
+    assert sanitized.speaker_map == {"SPEAKER_01": "Thim Yee Song"}
+    assert [line.speaker for line in sanitized.transcript] == ["Thim Yee Song", "SPEAKER_02"]
+    assert sanitized.decisions[0].speaker == ""
+    assert sanitized.action_items[0].assignee == ""
+    assert sanitized.knowledge_triples[0].subject == "Mike"
+    assert sanitized.knowledge_triples[0].subject_type == EntityType.concept
+    assert sanitized.knowledge_triples[0].object == "Thim Yee Song"
+    assert sanitized.knowledge_triples[0].object_type == EntityType.person
 
 
 def test_storage_round_trips_live_segments(tmp_path):

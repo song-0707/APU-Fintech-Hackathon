@@ -80,7 +80,10 @@ def test_decision_speaker_and_decision_project_merges_use_normalized_keys():
     assert kwargs["speaker_key"] == "alex chen"
     assert kwargs["speaker"] == "ALEX chen"
 
-    decision_project_calls = [c for c in mock_run.call_args_list if c.args[0].startswith("MATCH (d:Decision {id: $id})")]
+    decision_project_calls = [
+        c for c in mock_run.call_args_list
+        if c.args[0].startswith("MATCH (d:Decision {id: $id})") and "RELATES_TO" in c.args[0]
+    ]
     assert len(decision_project_calls) == 1
     _, kwargs = decision_project_calls[0]
     assert kwargs["project_key"] == "phoenix"
@@ -97,6 +100,26 @@ def test_action_item_assignee_merge_uses_normalized_key():
     _, kwargs = assigned_calls[0]
     assert kwargs["assignee_key"] == "tom wright"
     assert kwargs["assignee"] == "  Tom Wright"
+
+
+def test_blank_decision_speaker_does_not_create_person_node():
+    mock_run = MagicMock(return_value=[])
+    decision = Decision(
+        text="Ship it", confidence=DecisionConfidence.firm_commitment, timestamp="00:00:00", speaker=""
+    )
+    with patch.object(graph_builder, "run_query", mock_run):
+        graph_builder.build_from_meeting("m1", "Title", None, _intelligence(decisions=[decision]))
+
+    assert not [c for c in mock_run.call_args_list if "MADE_BY" in c.args[0]]
+
+
+def test_blank_action_item_assignee_does_not_create_person_node():
+    mock_run = MagicMock(return_value=[])
+    item = ActionItem(task="Write report", assignee="")
+    with patch.object(graph_builder, "run_query", mock_run):
+        graph_builder.build_from_meeting("m1", "Title", None, _intelligence(action_items=[item]))
+
+    assert not [c for c in mock_run.call_args_list if "ASSIGNED_TO" in c.args[0]]
 
 
 def test_knowledge_triple_merge_uses_normalized_keys_for_subject_and_object():

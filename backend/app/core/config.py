@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     demo_mode: bool = True
     chroma_path: str = "storage/chroma"
-    ask_coco_semantic_search: bool = False
+    ask_coco_semantic_search: bool = True
     neo4j_timeout_seconds: float = 5.0
 
     # Set in production to the deployed frontend's exact origin (e.g.

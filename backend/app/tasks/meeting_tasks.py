@@ -13,6 +13,7 @@ from app.models.meeting import Meeting, ProcessingTask
 from app.schemas.meeting_intelligence import (
     ActionItem,
     Decision,
+    EntityType,
     MeetingIntelligence,
     TranscriptLine,
 )
@@ -34,6 +35,93 @@ def _get_or_create_task_record(db, meeting_id: str) -> ProcessingTask:
         task_record = ProcessingTask(meeting_id=meeting_id)
         db.add(task_record)
     return task_record
+
+
+def _employee_name_map(db: Session) -> dict[str, str]:
+    """Case-insensitive registered employee lookup with canonical DB casing."""
+    return {
+        employee.name.strip().lower(): employee.name.strip()
+        for employee in db.query(Employee).all()
+        if employee.name and employee.name.strip()
+    }
+
+
+def _canonical_employee_name(name: str | None, employees_by_lower: dict[str, str]) -> str | None:
+    if not name:
+        return None
+    return employees_by_lower.get(name.strip().lower())
+
+
+def _fallback_speaker_label(line: TranscriptLine) -> str:
+    raw = (line.speaker_raw or "").strip()
+    if raw.upper().startswith("SPEAKER_"):
+        return raw
+    if raw.isdigit():
+        return f"SPEAKER_{int(raw) + 1:02d}"
+    return "Speaker"
+
+
+def _unique_registered_names(names: list[str], employees_by_lower: dict[str, str]) -> list[str]:
+    seen: set[str] = set()
+    registered: list[str] = []
+    for name in names:
+        canonical = _canonical_employee_name(name, employees_by_lower)
+        if canonical and canonical.lower() not in seen:
+            registered.append(canonical)
+            seen.add(canonical.lower())
+    return registered
+
+
+def _sanitize_registered_people(db: Session, intelligence: MeetingIntelligence) -> MeetingIntelligence:
+    """Keep Person identity nodes limited to registered employees.
+
+    Gemini can infer people mentioned in the transcript ("Mike", "CEO") even
+    when they are not employees. Those names are useful as concepts, but they
+    should not become participants, speakers, assignees, or Person graph nodes.
+    """
+    employees_by_lower = _employee_name_map(db)
+
+    intelligence.speaker_map = {
+        speaker_id: canonical
+        for speaker_id, name in intelligence.speaker_map.items()
+        if (canonical := _canonical_employee_name(name, employees_by_lower))
+    }
+
+    transcript_speakers: list[str] = []
+    for line in intelligence.transcript:
+        canonical = _canonical_employee_name(line.speaker, employees_by_lower)
+        if canonical:
+            line.speaker = canonical
+            transcript_speakers.append(canonical)
+        else:
+            line.speaker = _fallback_speaker_label(line)
+
+    intelligence.participants = _unique_registered_names(
+        intelligence.participants + list(intelligence.speaker_map.values()) + transcript_speakers,
+        employees_by_lower,
+    )
+
+    for decision in intelligence.decisions:
+        decision.speaker = _canonical_employee_name(decision.speaker, employees_by_lower) or ""
+
+    for item in intelligence.action_items:
+        item.assignee = _canonical_employee_name(item.assignee, employees_by_lower) or ""
+
+    for triple in intelligence.knowledge_triples:
+        if triple.subject_type == EntityType.person:
+            canonical = _canonical_employee_name(triple.subject, employees_by_lower)
+            if canonical:
+                triple.subject = canonical
+            else:
+                triple.subject_type = EntityType.concept
+        if triple.object_type == EntityType.person:
+            canonical = _canonical_employee_name(triple.object, employees_by_lower)
+            if canonical:
+                triple.object = canonical
+            else:
+                triple.object_type = EntityType.concept
+
+    return intelligence
 
 
 def _analyze_transcript(
@@ -151,6 +239,8 @@ def _save_and_graph(db: Session, meeting: Meeting, intelligence: MeetingIntellig
     """Persist transcript/summary (StorageService, Task 1.1) and build the
     graph (Task 4.3), then write any CONTRADICTS edges (Task 4.4) now that
     this meeting's own Decision nodes exist."""
+    intelligence = _sanitize_registered_people(db, intelligence)
+
     storage.save_transcript(meeting.id, {
         "meeting_id": meeting.id,
         "transcript": [line.model_dump() for line in intelligence.transcript],
